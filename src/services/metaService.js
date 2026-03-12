@@ -2,10 +2,7 @@ const {
   metaAccessToken,
   metaPhoneNumberId,
 } = require("../config/env");
-
-function normalizeWhatsAppRecipient(value) {
-  return String(value || "").replace(/\D/g, "");
-}
+const { normalizeWhatsAppRecipient } = require("../utils/phone");
 
 async function sendWhatsAppTextMessage(to, body) {
   if (!metaAccessToken || !metaPhoneNumberId) {
