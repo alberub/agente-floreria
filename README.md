@@ -26,6 +26,15 @@ npm run dev
 
 `POST /agent/respond`
 
+## Webhook de Meta
+
+- `GET /webhook`: verificacion del webhook de Meta.
+- `POST /webhook`: recibe mensajes entrantes de WhatsApp y responde con el agente.
+
+En Render, la URL para pegar en Meta seria:
+
+`https://agente-floreria.onrender.com/webhook`
+
 Body de ejemplo:
 
 ```json

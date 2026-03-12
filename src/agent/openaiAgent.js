@@ -82,4 +82,6 @@ async function buildGreetingReply(message, nombreCliente) {
 
 module.exports = {
   buildGreetingReply,
+  runFloristAgent: async ({ message, nombreCliente }) =>
+    buildGreetingReply(message, nombreCliente),
 };
