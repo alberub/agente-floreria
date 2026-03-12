@@ -1,0 +1,28 @@
+{
+  "name": "agente-floreria",
+  "version": "1.0.0",
+  "description": "Agente base para una floreria con Node.js, Express y OpenAI.",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "check": "node --check src/server.js"
+  },
+  "keywords": [
+    "node",
+    "express",
+    "openai",
+    "floreria"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "openai": "^6.27.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
