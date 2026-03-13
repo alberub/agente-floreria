@@ -2,6 +2,13 @@ const express = require("express");
 const { metaVerifyToken } = require("../config/env");
 const { runFloristAgent } = require("../agent/openaiAgent");
 const { sendWhatsAppTextMessage } = require("../services/metaService");
+const {
+  findOrCreateCustomerByPhone,
+} = require("../repositories/customerRepository");
+const {
+  findOrCreateActiveConversation,
+} = require("../repositories/conversationRepository");
+const { saveMessage } = require("../repositories/messageRepository");
 
 const router = express.Router();
 
@@ -61,9 +68,26 @@ router.post("/webhook", async (req, res) => {
 
   for (const incomingMessage of messages) {
     try {
+      const customer = await findOrCreateCustomerByPhone(incomingMessage.from);
+      const conversation = await findOrCreateActiveConversation(customer.id);
+      await saveMessage({
+        conversacionId: conversation.id,
+        rol: "user",
+        mensaje: incomingMessage.text,
+      });
       const reply = await runFloristAgent({
         message: incomingMessage.text,
-        nombreCliente: incomingMessage.nombreCliente,
+        nombreCliente: customer.nombre || incomingMessage.nombreCliente,
+        telefono: customer.telefono,
+        customerId: customer.id,
+        conversationId: conversation.id,
+        conversationStateId: conversation.estadoId,
+        conversationCategoryId: conversation.categoriaId,
+      });
+      await saveMessage({
+        conversacionId: conversation.id,
+        rol: "bot",
+        mensaje: reply,
       });
 
       await sendWhatsAppTextMessage(incomingMessage.from, reply);

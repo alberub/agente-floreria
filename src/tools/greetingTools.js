@@ -1,4 +1,5 @@
 const { getActiveCategories } = require("../repositories/categoryRepository");
+const { getActiveIntentions } = require("../repositories/intentionRepository");
 
 const toolDefinitions = [
   {
@@ -22,9 +23,10 @@ const toolDefinitions = [
   }
 ];
 
-const STORE_NAME = "Floreria Rosabel";
+const STORE_NAME = "Floreria Deisy";
 const NO_CATEGORIES_MESSAGE =
   "En este momento no tengo categorias disponibles para mostrarte. Si quieres, puedo ayudarte en cuanto las actualicen.";
+const CATEGORY_REQUIRED_INTENT = "comprar_flores";
 
 function getCategoryEmoji(categoryName) {
   const normalized = String(categoryName || "").toLowerCase();
@@ -52,7 +54,13 @@ function getCategoryEmoji(categoryName) {
   return "🌸";
 }
 
-function buildGreetingMessage(categories, nombreCliente) {
+function shouldOfferCategories(intentions) {
+  return intentions.some(
+    (intention) => intention.nombre.toLowerCase() === CATEGORY_REQUIRED_INTENT
+  );
+}
+
+function buildGreetingMessage(categories, intentions, nombreCliente) {
   const categoryLines = categories
     .map(
       (category) => `${getCategoryEmoji(category.tipoCategoria)} ${category.tipoCategoria}`
@@ -61,6 +69,14 @@ function buildGreetingMessage(categories, nombreCliente) {
   const greetingLine = nombreCliente
     ? `¡Hola ${nombreCliente}! 🌸 Bienvenido a ${STORE_NAME}.`
     : `¡Hola! 🌸 Bienvenido a ${STORE_NAME}.`;
+  const offerCategories = shouldOfferCategories(intentions);
+
+  if (!offerCategories) {
+    return (
+      `${greetingLine}\n\n` +
+      "Estoy lista para ayudarte con tu pedido, productos, precios, envios o metodos de pago."
+    );
+  }
 
   if (categories.length === 0) {
     return `${greetingLine}\n\n${NO_CATEGORIES_MESSAGE}`;
@@ -80,12 +96,14 @@ async function handleToolCall(toolName, args) {
   }
 
   const categories = await getActiveCategories();
+  const intentions = await getActiveIntentions();
 
   return {
     ok: true,
     nombreCliente: args.nombreCliente || null,
     categorias: categories,
-    saludo: buildGreetingMessage(categories, args.nombreCliente),
+    intenciones: intentions,
+    saludo: buildGreetingMessage(categories, intentions, args.nombreCliente),
   };
 }
 
