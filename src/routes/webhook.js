@@ -8,7 +8,10 @@ const {
 const {
   findOrCreateActiveConversation,
 } = require("../repositories/conversationRepository");
-const { saveMessage } = require("../repositories/messageRepository");
+const {
+  getRecentMessagesByConversation,
+  saveMessage,
+} = require("../repositories/messageRepository");
 
 const router = express.Router();
 
@@ -75,6 +78,9 @@ router.post("/webhook", async (req, res) => {
         rol: "user",
         mensaje: incomingMessage.text,
       });
+      const recentMessages = await getRecentMessagesByConversation(
+        conversation.id
+      );
       const reply = await runFloristAgent({
         message: incomingMessage.text,
         nombreCliente: customer.nombre || incomingMessage.nombreCliente,
@@ -83,6 +89,7 @@ router.post("/webhook", async (req, res) => {
         conversationId: conversation.id,
         conversationStateId: conversation.estadoId,
         conversationCategoryId: conversation.categoriaId,
+        recentMessages,
       });
       await saveMessage({
         conversacionId: conversation.id,

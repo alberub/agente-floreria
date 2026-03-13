@@ -84,6 +84,10 @@ async function buildGreetingReply(message, nombreCliente) {
   return result.saludo;
 }
 
+async function detectCategoryInMessage(message) {
+  return findActiveCategoryByName(message);
+}
+
 function buildCategoryConfirmedReply(category) {
   return `Perfecto, trabajaremos con la categoria ${category.tipoCategoria}. Ahora te mostrare las opciones disponibles.`;
 }
@@ -122,6 +126,41 @@ function buildProductSelectedReply(product) {
   )}. Ahora comparteme la direccion de entrega, por favor.`;
 }
 
+function getLastBotMessage(recentMessages) {
+  return [...(recentMessages || [])].reverse().find((item) => item.rol === "bot");
+}
+
+function getLastUserMessage(recentMessages) {
+  return [...(recentMessages || [])].reverse().find((item) => item.rol === "user");
+}
+
+function isAvailabilityQuestion(message) {
+  const normalized = String(message || "").toLowerCase();
+
+  return (
+    normalized.includes("disponible") ||
+    normalized.includes("tienen") ||
+    normalized.includes("hay") ||
+    normalized.includes("esta disponible") ||
+    normalized.includes("están disponibles") ||
+    normalized.includes("estan disponibles")
+  );
+}
+
+function buildProductSelectionHelpReply(category, products) {
+  if (products.length === 0) {
+    return `No tengo productos activos para la categoria ${category.tipoCategoria} en este momento.`;
+  }
+
+  if (products.length === 1) {
+    return `Sí, está disponible ${products[0].nombre} por ${formatMoney(
+      products[0].precio
+    )}. Si lo deseas, responde "la quiero" para continuar con la direccion de entrega.`;
+  }
+
+  return `Si deseas continuar, responde con el numero o el nombre de una opcion de ${category.tipoCategoria}.`;
+}
+
 module.exports = {
   buildGreetingReply,
   runFloristAgent: async ({
@@ -131,60 +170,13 @@ module.exports = {
     conversationId,
     conversationStateId,
     conversationCategoryId,
+    recentMessages = [],
   }) => {
     const waitingCategoryStateId =
       await findConversationStateIdByName("esperando_categoria");
     const waitingProductStateId =
       await findConversationStateIdByName("esperando_producto");
-
-    if (
-      conversationId &&
-      Number(conversationStateId) === Number(waitingCategoryStateId)
-    ) {
-      const matchedCategory = await findActiveCategoryByName(message);
-
-      if (!matchedCategory) {
-        return buildCategoryRetryReply(nombreCliente);
-      }
-
-      await updateConversationCategory({
-        conversationId,
-        categoryId: matchedCategory.id,
-        stateName: "esperando_producto",
-      });
-
-      const products = await getActiveProductsByCategoryId(matchedCategory.id);
-
-      return buildProductListReply(matchedCategory, products);
-    }
-
-    const activeIntentions = await getActiveIntentions();
-    const detectedIntentionName = await detectIntentionWithOpenAI(
-      message,
-      activeIntentions
-    );
-    const isInitialConversation =
-      !conversationStateId || Number(conversationStateId) === 1;
-
-    if (
-      isInitialConversation &&
-      detectedIntentionName === "comprar_flores" &&
-      conversationId
-    ) {
-      const matchedIntention = activeIntentions.find(
-        (item) => item.nombre === detectedIntentionName
-      );
-
-      if (matchedIntention) {
-        await updateConversationIntent({
-          conversationId,
-          intentionId: matchedIntention.id,
-          stateName: "esperando_categoria",
-        });
-      }
-
-      return buildGreetingReply(message, nombreCliente);
-    }
+    const initialStateId = await findConversationStateIdByName("inicio");
 
     if (Number(conversationStateId) === Number(waitingProductStateId)) {
       if (!conversationCategoryId) {
@@ -207,6 +199,21 @@ module.exports = {
       );
 
       if (!selectedProduct) {
+        if (isGreetingMessage(message) || isAvailabilityQuestion(message)) {
+          return buildProductSelectionHelpReply(selectedCategory, products);
+        }
+
+        const lastBotMessage = getLastBotMessage(recentMessages);
+        const lastUserMessage = getLastUserMessage(recentMessages);
+
+        if (
+          lastBotMessage?.mensaje &&
+          lastBotMessage.mensaje.includes("Estas son las opciones disponibles") &&
+          lastUserMessage?.mensaje === message
+        ) {
+          return buildProductSelectionHelpReply(selectedCategory, products);
+        }
+
         return buildProductListReply(selectedCategory, products);
       }
 
@@ -231,8 +238,91 @@ module.exports = {
       return buildProductSelectedReply(selectedProduct);
     }
 
-    if (isGreetingMessage(message) || !detectedIntentionName) {
+    if (
+      conversationId &&
+      Number(conversationStateId) === Number(waitingCategoryStateId)
+    ) {
+      const matchedCategory = await findActiveCategoryByName(message);
+
+      if (!matchedCategory) {
+        return buildCategoryRetryReply(nombreCliente);
+      }
+
+      await updateConversationCategory({
+        conversationId,
+        categoryId: matchedCategory.id,
+        stateName: "esperando_producto",
+      });
+
+      const products = await getActiveProductsByCategoryId(matchedCategory.id);
+
+      return buildProductListReply(matchedCategory, products);
+    }
+
+    const activeIntentions = await getActiveIntentions();
+    const matchedCategoryFromFreeText = await detectCategoryInMessage(message);
+    const detectedIntentionName = await detectIntentionWithOpenAI(
+      message,
+      activeIntentions
+    );
+    const isInitialConversation =
+      !conversationStateId ||
+      Number(conversationStateId) === Number(initialStateId);
+
+    if (
+      isInitialConversation &&
+      conversationId &&
+      matchedCategoryFromFreeText
+    ) {
+      const matchedIntention = activeIntentions.find(
+        (item) => item.nombre === "comprar_flores"
+      );
+
+      if (matchedIntention) {
+        await updateConversationIntent({
+          conversationId,
+          intentionId: matchedIntention.id,
+          stateName: "esperando_categoria",
+        });
+      }
+
+      await updateConversationCategory({
+        conversationId,
+        categoryId: matchedCategoryFromFreeText.id,
+        stateName: "esperando_producto",
+      });
+
+      const products = await getActiveProductsByCategoryId(
+        matchedCategoryFromFreeText.id
+      );
+
+      return buildProductListReply(matchedCategoryFromFreeText, products);
+    }
+
+    if (
+      isInitialConversation &&
+      detectedIntentionName === "comprar_flores" &&
+      conversationId
+    ) {
+      const matchedIntention = activeIntentions.find(
+        (item) => item.nombre === detectedIntentionName
+      );
+
+      if (matchedIntention) {
+        await updateConversationIntent({
+          conversationId,
+          intentionId: matchedIntention.id,
+          stateName: "esperando_categoria",
+        });
+      }
+
       return buildGreetingReply(message, nombreCliente);
+    }
+
+    if (isGreetingMessage(message) || !detectedIntentionName) {
+      return isInitialConversation
+        ? buildGreetingReply(message, nombreCliente)
+        : "Seguimos con tu proceso actual. Responde con la opcion correspondiente para continuar.";
     }
 
     return buildGreetingReply(message, nombreCliente);

@@ -36,6 +36,20 @@ async function findActiveProductSelection(categoryId, message) {
   const normalizedMessage = normalizeProductText(message);
   const compactMessage = normalizedMessage.replace(/\s+/g, "");
   const selectionByNumber = Number.parseInt(String(message || "").trim(), 10);
+  const affirmativeSelectionPatterns = [
+    /\bla quiero\b/,
+    /\blo quiero\b/,
+    /\bquiero esa\b/,
+    /\bquiero ese\b/,
+    /\bme gusta esa\b/,
+    /\bme agrada esa\b/,
+    /\besa opcion\b/,
+    /\besa opción\b/,
+    /\bla opcion\b/,
+    /\bla opción\b/,
+    /\besa\b/,
+    /\bese\b/,
+  ];
 
   if (Number.isInteger(selectionByNumber) && selectionByNumber > 0) {
     const byIndex = products[selectionByNumber - 1];
@@ -43,6 +57,13 @@ async function findActiveProductSelection(categoryId, message) {
     if (byIndex) {
       return byIndex;
     }
+  }
+
+  if (
+    products.length === 1 &&
+    affirmativeSelectionPatterns.some((pattern) => pattern.test(normalizedMessage))
+  ) {
+    return products[0];
   }
 
   return (
@@ -63,4 +84,5 @@ async function findActiveProductSelection(categoryId, message) {
 module.exports = {
   getActiveProductsByCategoryId,
   findActiveProductSelection,
+  normalizeProductText,
 };

@@ -7,7 +7,10 @@ const {
   findActiveConversationByCustomerId,
   findOrCreateActiveConversation,
 } = require("../repositories/conversationRepository");
-const { saveMessage } = require("../repositories/messageRepository");
+const {
+  getRecentMessagesByConversation,
+  saveMessage,
+} = require("../repositories/messageRepository");
 
 const router = express.Router();
 
@@ -35,6 +38,10 @@ router.post("/agent/respond", async (req, res) => {
       });
     }
 
+    const recentMessages = conversation
+      ? await getRecentMessagesByConversation(conversation.id)
+      : [];
+
     const reply = await runFloristAgent({
       message,
       nombreCliente: customer?.nombre || nombreCliente,
@@ -43,6 +50,7 @@ router.post("/agent/respond", async (req, res) => {
       conversationId: conversation?.id || null,
       conversationStateId: conversation?.estadoId || null,
       conversationCategoryId: conversation?.categoriaId || null,
+      recentMessages,
     });
 
     if (conversation) {

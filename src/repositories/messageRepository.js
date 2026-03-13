@@ -24,6 +24,30 @@ async function saveMessage({ conversacionId, rol, mensaje }) {
   };
 }
 
+async function getRecentMessagesByConversation(conversacionId, limit = 10) {
+  const result = await db.query(
+    `
+      SELECT id, conversacion_id, rol, mensaje, fecha
+      FROM public.mensajes
+      WHERE conversacion_id = $1
+      ORDER BY id DESC
+      LIMIT $2
+    `,
+    [conversacionId, limit]
+  );
+
+  return result.rows
+    .reverse()
+    .map((row) => ({
+      id: Number(row.id),
+      conversacionId: Number(row.conversacion_id),
+      rol: row.rol,
+      mensaje: row.mensaje,
+      fecha: row.fecha,
+    }));
+}
+
 module.exports = {
   saveMessage,
+  getRecentMessagesByConversation,
 };
