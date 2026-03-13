@@ -6,6 +6,7 @@ Proyecto base en `Node.js` y `Express` para una floreria. Por ahora incluye una 
 
 - Node.js 20+
 - `OPENAI_API_KEY`
+- PostgreSQL
 
 ## Variables de entorno
 
@@ -13,6 +14,12 @@ Proyecto base en `Node.js` y `Express` para una floreria. Por ahora incluye una 
 PORT=3000
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4.1-mini
+DATABASE_URL=
+USER=
+HOST=
+PASSWORD=
+DATABASE=
+PORTDB=5432
 ```
 
 ## Ejecutar
@@ -49,6 +56,6 @@ Respuesta esperada:
 ```json
 {
   "ok": true,
-  "reply": "Hola, Andrea. Bienvenida a Floreria Botanic. Estoy para ayudarte con flores, arreglos y pedidos."
+  "reply": "¡Hola! 🌸 Bienvenido a Florería Rosabel.\n\nMe encantaría ayudarte a elegir el detalle perfecto.\n\n¿Para qué ocasión buscas flores hoy?\n\n💐 Aniversario\n🎂 Cumpleaños\n🌷 Solo porque sí"
 }
 ```
