@@ -15,9 +15,8 @@ const {
 } = require("../repositories/productRepository");
 const {
   createOrder,
-  findLatestPendingOrderByConversationId,
-  updateOrderDeliveryAddress,
 } = require("../repositories/orderRepository");
+const { findClosestBranchCoverage } = require("../repositories/branchRepository");
 const { geocodeAddress } = require("../services/mapsService");
 const {
   findConversationStateIdByName,
@@ -168,6 +167,45 @@ function getPreviousBotMessage(recentMessages, currentMessage) {
   return null;
 }
 
+function getProductSelectionMessage(recentMessages) {
+  const messages = [...(recentMessages || [])];
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const item = messages[index];
+
+    if (
+      item.rol === "bot" &&
+      typeof item.mensaje === "string" &&
+      item.mensaje.includes("Ahora comparteme la direccion completa de entrega")
+    ) {
+      for (let lookup = index - 1; lookup >= 0; lookup -= 1) {
+        if (messages[lookup].rol === "user") {
+          return messages[lookup].mensaje;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+async function getSelectedProductFromRecentMessages(
+  recentMessages,
+  conversationCategoryId
+) {
+  if (!conversationCategoryId) {
+    return null;
+  }
+
+  const selectedProductMessage = getProductSelectionMessage(recentMessages);
+
+  if (!selectedProductMessage) {
+    return null;
+  }
+
+  return findActiveProductSelection(conversationCategoryId, selectedProductMessage);
+}
+
 function isAvailabilityQuestion(message) {
   const normalized = String(message || "").toLowerCase();
 
@@ -221,10 +259,19 @@ function extractConfirmedAddressFromBotMessage(message) {
   const normalized = String(message || "").trim();
   const prefix = "Encontre esta direccion en Google Maps: ";
   const suffix = ". Si es correcta, responde \"si\". Si no, responde \"no\" y comparteme la direccion otra vez.";
+  const coverageMarker = ". La sucursal ";
   const warningMarker = ". Google Maps la marco como aproximada, asi que necesito tu confirmacion.";
 
   if (!normalized.startsWith(prefix)) {
     return null;
+  }
+
+  if (normalized.includes(coverageMarker)) {
+    const [addressPart] = normalized
+      .slice(prefix.length)
+      .split(coverageMarker, 1);
+
+    return addressPart ? addressPart.trim() : null;
   }
 
   if (normalized.includes(warningMarker)) {
@@ -240,6 +287,28 @@ function extractConfirmedAddressFromBotMessage(message) {
   }
 
   return normalized.slice(prefix.length, -suffix.length).trim();
+}
+
+function extractFinalOrderAddressFromBotMessage(message) {
+  const normalized = String(message || "").trim();
+  const prefix = "Corrobora tu pedido:\n";
+  const addressLinePrefix = "Direccion de entrega: ";
+  const confirmationLine =
+    'Si todo es correcto, responde "si". Si deseas cambiar algo, responde "no".';
+
+  if (!normalized.startsWith(prefix) || !normalized.includes(confirmationLine)) {
+    return null;
+  }
+
+  const addressLine = normalized
+    .split("\n")
+    .find((line) => line.startsWith(addressLinePrefix));
+
+  if (!addressLine) {
+    return null;
+  }
+
+  return addressLine.slice(addressLinePrefix.length).trim();
 }
 
 async function buildAddressRetryReply() {
@@ -260,6 +329,9 @@ async function buildAddressGeocodeRetryReply() {
 async function buildAddressConfirmationRequestReply(geocodedAddress) {
   const result = await handleDeliveryToolCall("solicitar_confirmacion_direccion", {
     direccionEntrega: geocodedAddress.formattedAddress,
+    sucursalNombre: geocodedAddress.coverage?.nombre,
+    distanciaMetros: geocodedAddress.coverage?.distanciaMetros,
+    radioEntregaMetros: geocodedAddress.coverage?.radioEntregaMetros,
     locationType: geocodedAddress.locationType,
     partialMatch: geocodedAddress.partialMatch,
   });
@@ -267,8 +339,29 @@ async function buildAddressConfirmationRequestReply(geocodedAddress) {
   return result.mensaje;
 }
 
+async function buildAddressOutOfCoverageReply(geocodedAddress) {
+  const result = await handleDeliveryToolCall("direccion_fuera_de_cobertura", {
+    direccionEntrega: geocodedAddress.formattedAddress,
+    sucursalNombre: geocodedAddress.coverage?.nombre,
+    distanciaMetros: geocodedAddress.coverage?.distanciaMetros,
+    radioEntregaMetros: geocodedAddress.coverage?.radioEntregaMetros,
+  });
+
+  return result.mensaje;
+}
+
 async function buildAddressConfirmedReply(deliveryAddress) {
   const result = await handleDeliveryToolCall("confirmar_direccion_entrega", {
+    direccionEntrega: deliveryAddress,
+  });
+
+  return result.mensaje;
+}
+
+async function buildFinalOrderConfirmationReply({ product, deliveryAddress }) {
+  const result = await handleDeliveryToolCall("solicitar_confirmacion_pedido", {
+    nombreProducto: product.nombre,
+    precioProducto: formatMoney(product.precio),
     direccionEntrega: deliveryAddress,
   });
 
@@ -299,22 +392,36 @@ module.exports = {
         return "No pude ubicar la conversacion activa para registrar la direccion.";
       }
 
-      const pendingOrder =
-        await findLatestPendingOrderByConversationId(conversationId);
-
-      if (!pendingOrder) {
-        return "No encontre un pedido pendiente para registrar la direccion de entrega.";
-      }
-
       const previousBotMessage = getPreviousBotMessage(recentMessages, message);
+      const pendingFinalOrderAddress = extractFinalOrderAddressFromBotMessage(
+        previousBotMessage?.mensaje
+      );
       const pendingConfirmedAddress = extractConfirmedAddressFromBotMessage(
         previousBotMessage?.mensaje
       );
 
-      if (pendingConfirmedAddress && isAffirmativeMessage(message)) {
-        await updateOrderDeliveryAddress({
-          orderId: pendingOrder.id,
-          deliveryAddress: pendingConfirmedAddress,
+      if (pendingFinalOrderAddress && isAffirmativeMessage(message)) {
+        if (!customerId || !conversationCategoryId) {
+          throw new Error(
+            "Faltan datos de cliente o categoria para crear el pedido confirmado."
+          );
+        }
+
+        const selectedProduct = await getSelectedProductFromRecentMessages(
+          recentMessages,
+          conversationCategoryId
+        );
+
+        if (!selectedProduct) {
+          return "No pude recuperar el producto seleccionado para generar tu pedido.";
+        }
+
+        await createOrder({
+          customerId,
+          productId: selectedProduct.id,
+          conversationId,
+          deliveryAddress: pendingFinalOrderAddress,
+          total: selectedProduct.precio,
         });
 
         await updateConversationState({
@@ -322,11 +429,44 @@ module.exports = {
           stateName: "inicio",
         });
 
-        return buildAddressConfirmedReply(pendingConfirmedAddress);
+        return buildAddressConfirmedReply(pendingFinalOrderAddress);
+      }
+
+      if (pendingFinalOrderAddress && isNegativeMessage(message)) {
+        return (
+          "De acuerdo. Comparteme la direccion corregida o el numero/nombre del producto que deseas cambiar."
+        );
       }
 
       if (pendingConfirmedAddress && isNegativeMessage(message)) {
         return buildAddressRetryReply();
+      }
+
+      if (pendingConfirmedAddress && isAffirmativeMessage(message)) {
+        const selectedProduct = await getSelectedProductFromRecentMessages(
+          recentMessages,
+          conversationCategoryId
+        );
+
+        if (!selectedProduct) {
+          return "No pude recuperar el producto seleccionado para corroborar el pedido.";
+        }
+
+        return buildFinalOrderConfirmationReply({
+          product: selectedProduct,
+          deliveryAddress: pendingConfirmedAddress,
+        });
+      }
+
+      if (conversationCategoryId) {
+        const replacementProduct = await findActiveProductSelection(
+          conversationCategoryId,
+          message
+        );
+
+        if (replacementProduct) {
+          return buildProductSelectedReply(replacementProduct);
+        }
       }
 
       if (isGreetingMessage(message) || !looksLikeDeliveryAddress(message)) {
@@ -337,6 +477,21 @@ module.exports = {
 
       if (!geocodedAddress.ok || !geocodedAddress.result?.formattedAddress) {
         return buildAddressGeocodeRetryReply();
+      }
+
+      const coverage = await findClosestBranchCoverage({
+        lat: geocodedAddress.result.location.lat,
+        lng: geocodedAddress.result.location.lng,
+      });
+
+      if (!coverage) {
+        return "No encontre una sucursal configurada para validar la zona de envio.";
+      }
+
+      geocodedAddress.result.coverage = coverage;
+
+      if (!coverage.dentroDeCobertura) {
+        return buildAddressOutOfCoverageReply(geocodedAddress.result);
       }
 
       return buildAddressConfirmationRequestReply(geocodedAddress.result);
@@ -383,16 +538,9 @@ module.exports = {
 
       if (!customerId || !conversationId) {
         throw new Error(
-          "Faltan datos de cliente o conversacion para crear el pedido."
+          "Faltan datos de cliente o conversacion para continuar con la compra."
         );
       }
-
-      await createOrder({
-        customerId,
-        productId: selectedProduct.id,
-        conversationId,
-        total: selectedProduct.precio,
-      });
 
       await updateConversationState({
         conversationId,

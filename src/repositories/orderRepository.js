@@ -17,6 +17,7 @@ async function createOrder({
   customerId,
   productId,
   conversationId,
+  deliveryAddress = null,
   total,
 }) {
   const result = await db.query(
@@ -30,10 +31,10 @@ async function createOrder({
         estado,
         fecha_creacion
       )
-      VALUES ($1, $2, $3, NULL, $4, 'pendiente', NOW())
+      VALUES ($1, $2, $3, $4, $5, 'pendiente', NOW())
       RETURNING id, cliente_id, producto_id, conversacion_id, direccion_entrega, total, estado, fecha_creacion
     `,
-    [customerId, productId, conversationId, total]
+    [customerId, productId, conversationId, deliveryAddress, total]
   );
 
   return mapOrder(result.rows[0]);
