@@ -46,5 +46,6 @@ module.exports = {
   metaVerifyToken: cleanEnvValue(process.env.META_VERIFY_TOKEN),
   metaPhoneNumberId: cleanEnvValue(process.env.META_PHONE_NUMBER_ID),
   metaAccessToken: cleanEnvValue(process.env.META_ACCESS_TOKEN),
+  mapsApiKey: cleanEnvValue(process.env.MAPS_API_KEY),
   validateEnv,
 };

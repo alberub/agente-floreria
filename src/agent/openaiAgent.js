@@ -18,6 +18,7 @@ const {
   findLatestPendingOrderByConversationId,
   updateOrderDeliveryAddress,
 } = require("../repositories/orderRepository");
+const { geocodeAddress } = require("../services/mapsService");
 const {
   findConversationStateIdByName,
   updateConversationCategory,
@@ -143,6 +144,30 @@ function getLastUserMessage(recentMessages) {
   return [...(recentMessages || [])].reverse().find((item) => item.rol === "user");
 }
 
+function getPreviousBotMessage(recentMessages, currentMessage) {
+  const messages = [...(recentMessages || [])];
+  let skippedCurrentUser = false;
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const item = messages[index];
+
+    if (
+      !skippedCurrentUser &&
+      item.rol === "user" &&
+      item.mensaje === currentMessage
+    ) {
+      skippedCurrentUser = true;
+      continue;
+    }
+
+    if (item.rol === "bot") {
+      return item;
+    }
+  }
+
+  return null;
+}
+
 function isAvailabilityQuestion(message) {
   const normalized = String(message || "").toLowerCase();
 
@@ -180,6 +205,43 @@ function looksLikeDeliveryAddress(message) {
   return /[0-9]/.test(normalized) || normalized.split(/\s+/).length >= 4;
 }
 
+function isAffirmativeMessage(message) {
+  return /^(si|sí|correcto|es correcto|confirmo|ok|okay)$/i.test(
+    String(message || "").trim()
+  );
+}
+
+function isNegativeMessage(message) {
+  return /^(no|incorrecto|no es correcto|cambiar|corrijo)$/i.test(
+    String(message || "").trim()
+  );
+}
+
+function extractConfirmedAddressFromBotMessage(message) {
+  const normalized = String(message || "").trim();
+  const prefix = "Encontre esta direccion en Google Maps: ";
+  const suffix = ". Si es correcta, responde \"si\". Si no, responde \"no\" y comparteme la direccion otra vez.";
+  const warningMarker = ". Google Maps la marco como aproximada, asi que necesito tu confirmacion.";
+
+  if (!normalized.startsWith(prefix)) {
+    return null;
+  }
+
+  if (normalized.includes(warningMarker)) {
+    const [addressPart] = normalized
+      .slice(prefix.length)
+      .split(warningMarker, 1);
+
+    return addressPart ? addressPart.trim() : null;
+  }
+
+  if (!normalized.endsWith(suffix)) {
+    return null;
+  }
+
+  return normalized.slice(prefix.length, -suffix.length).trim();
+}
+
 async function buildAddressRetryReply() {
   const result = await handleDeliveryToolCall("solicitar_direccion_entrega", {
     nombreProducto: "tu pedido",
@@ -189,6 +251,20 @@ async function buildAddressRetryReply() {
     "Aun necesito una direccion valida para continuar. " +
     result.mensaje.replace("Perfecto, elegiste tu pedido. ", "")
   );
+}
+
+async function buildAddressGeocodeRetryReply() {
+  return "No pude validar esa direccion en Google Maps. Compartemela de nuevo con calle, numero, colonia y municipio.";
+}
+
+async function buildAddressConfirmationRequestReply(geocodedAddress) {
+  const result = await handleDeliveryToolCall("solicitar_confirmacion_direccion", {
+    direccionEntrega: geocodedAddress.formattedAddress,
+    locationType: geocodedAddress.locationType,
+    partialMatch: geocodedAddress.partialMatch,
+  });
+
+  return result.mensaje;
 }
 
 async function buildAddressConfirmedReply(deliveryAddress) {
@@ -230,23 +306,40 @@ module.exports = {
         return "No encontre un pedido pendiente para registrar la direccion de entrega.";
       }
 
+      const previousBotMessage = getPreviousBotMessage(recentMessages, message);
+      const pendingConfirmedAddress = extractConfirmedAddressFromBotMessage(
+        previousBotMessage?.mensaje
+      );
+
+      if (pendingConfirmedAddress && isAffirmativeMessage(message)) {
+        await updateOrderDeliveryAddress({
+          orderId: pendingOrder.id,
+          deliveryAddress: pendingConfirmedAddress,
+        });
+
+        await updateConversationState({
+          conversationId,
+          stateName: "inicio",
+        });
+
+        return buildAddressConfirmedReply(pendingConfirmedAddress);
+      }
+
+      if (pendingConfirmedAddress && isNegativeMessage(message)) {
+        return buildAddressRetryReply();
+      }
+
       if (isGreetingMessage(message) || !looksLikeDeliveryAddress(message)) {
         return buildAddressRetryReply();
       }
 
-      const deliveryAddress = String(message || "").trim();
+      const geocodedAddress = await geocodeAddress(message);
 
-      await updateOrderDeliveryAddress({
-        orderId: pendingOrder.id,
-        deliveryAddress,
-      });
+      if (!geocodedAddress.ok || !geocodedAddress.result?.formattedAddress) {
+        return buildAddressGeocodeRetryReply();
+      }
 
-      await updateConversationState({
-        conversationId,
-        stateName: "inicio",
-      });
-
-      return buildAddressConfirmedReply(deliveryAddress);
+      return buildAddressConfirmationRequestReply(geocodedAddress.result);
     }
 
     if (Number(conversationStateId) === Number(waitingProductStateId)) {

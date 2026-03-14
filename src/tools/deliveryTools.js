@@ -21,16 +21,44 @@ const toolDefinitions = [
   {
     type: "function",
     function: {
-      name: "confirmar_direccion_entrega",
+      name: "solicitar_confirmacion_direccion",
       description:
-        "Confirma al cliente la direccion recibida para su pedido.",
+        "Pide al cliente confirmar la direccion encontrada por Google Maps.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
           direccionEntrega: {
             type: "string",
-            description: "Direccion compartida por el cliente.",
+            description: "Direccion normalizada encontrada por Google Maps.",
+          },
+          locationType: {
+            type: "string",
+            description: "Nivel de precision devuelto por Google Maps.",
+          },
+          partialMatch: {
+            type: "boolean",
+            description:
+              "Indica si Google Maps solo encontro una coincidencia parcial.",
+          },
+        },
+        required: ["direccionEntrega"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "confirmar_direccion_entrega",
+      description:
+        "Confirma al cliente la direccion ya validada para su pedido.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          direccionEntrega: {
+            type: "string",
+            description: "Direccion confirmada por el cliente.",
           },
         },
         required: ["direccionEntrega"],
@@ -55,11 +83,39 @@ function buildDeliveryAddressConfirmationMessage(direccionEntrega) {
   );
 }
 
+function buildRequestDeliveryAddressConfirmationMessage({
+  direccionEntrega,
+  locationType,
+  partialMatch,
+}) {
+  const precisionWarning =
+    partialMatch || (locationType && locationType !== "ROOFTOP")
+      ? " Google Maps la marco como aproximada, asi que necesito tu confirmacion."
+      : "";
+
+  return (
+    `Encontre esta direccion en Google Maps: ${direccionEntrega}.` +
+    `${precisionWarning} ` +
+    'Si es correcta, responde "si". Si no, responde "no" y comparteme la direccion otra vez.'
+  );
+}
+
 async function handleToolCall(toolName, args) {
   if (toolName === "solicitar_direccion_entrega") {
     return {
       ok: true,
       mensaje: buildRequestDeliveryAddressMessage(args.nombreProducto),
+    };
+  }
+
+  if (toolName === "solicitar_confirmacion_direccion") {
+    return {
+      ok: true,
+      mensaje: buildRequestDeliveryAddressConfirmationMessage({
+        direccionEntrega: args.direccionEntrega,
+        locationType: args.locationType,
+        partialMatch: args.partialMatch,
+      }),
     };
   }
 
