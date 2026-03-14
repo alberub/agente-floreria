@@ -167,6 +167,30 @@ function getPreviousBotMessage(recentMessages, currentMessage) {
   return null;
 }
 
+function getPreviousUserMessage(recentMessages, currentMessage) {
+  const messages = [...(recentMessages || [])];
+  let skippedCurrentUser = false;
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const item = messages[index];
+
+    if (
+      !skippedCurrentUser &&
+      item.rol === "user" &&
+      item.mensaje === currentMessage
+    ) {
+      skippedCurrentUser = true;
+      continue;
+    }
+
+    if (item.rol === "user") {
+      return item;
+    }
+  }
+
+  return null;
+}
+
 function getProductSelectionMessage(recentMessages) {
   const messages = [...(recentMessages || [])];
 
@@ -241,6 +265,74 @@ function looksLikeDeliveryAddress(message) {
   }
 
   return /[0-9]/.test(normalized) || normalized.split(/\s+/).length >= 4;
+}
+
+function isAddressCorrectionMessage(message) {
+  return /^(no|era|quise decir|corrijo|me equivoque|me equivoqué)\b/i.test(
+    String(message || "").trim()
+  );
+}
+
+function extractLocalityHint(message) {
+  const normalized = String(message || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+  const directHints = [
+    "san nicolas",
+    "san nicolas de los garza",
+    "apodaca",
+    "monterrey",
+    "guadalupe",
+    "escobedo",
+    "nuevo leon",
+  ];
+
+  const matchedHint = directHints.find((hint) => normalized.includes(hint));
+
+  if (matchedHint) {
+    return matchedHint;
+  }
+
+  const genericMatch = normalized.match(/\b(?:de|en)\s+([a-z\s]+)$/);
+
+  if (!genericMatch) {
+    return null;
+  }
+
+  return genericMatch[1].trim();
+}
+
+function cleanAddressCorrection(message) {
+  return String(message || "")
+    .replace(/^(no[,.\s]*)/i, "")
+    .replace(/^(era\s+)/i, "")
+    .replace(/^(quise decir\s+)/i, "")
+    .replace(/^(corrijo\s*:?\s*)/i, "")
+    .replace(/^(me equivoque[,.\s]*)/i, "")
+    .replace(/^(me equivoqué[,.\s]*)/i, "")
+    .trim();
+}
+
+function buildAddressSearchQuery({ message, previousUserMessage }) {
+  const cleanedMessage = cleanAddressCorrection(message);
+  const localityHint = extractLocalityHint(message);
+  const previousAddress = String(previousUserMessage?.mensaje || "").trim();
+
+  if (looksLikeDeliveryAddress(cleanedMessage)) {
+    return `${cleanedMessage}, Nuevo Leon, Mexico`;
+  }
+
+  if (previousAddress && localityHint) {
+    return `${previousAddress}, ${localityHint}, Nuevo Leon, Mexico`;
+  }
+
+  if (previousAddress && cleanedMessage) {
+    return `${previousAddress}, ${cleanedMessage}, Nuevo Leon, Mexico`;
+  }
+
+  return null;
 }
 
 function isAffirmativeMessage(message) {
@@ -326,6 +418,18 @@ async function buildAddressGeocodeRetryReply() {
   return "No pude validar esa direccion en Google Maps. Compartemela de nuevo con calle, numero, colonia y municipio.";
 }
 
+async function buildAddressOutsideMetroReply(municipality) {
+  const municipalityLabel = municipality
+    ? ` en ${municipality}`
+    : "";
+
+  return (
+    "Por el momento solo realizamos entregas dentro del area metropolitana de Monterrey. " +
+    `La direccion encontrada queda${municipalityLabel}. ` +
+    "Comparteme otra direccion dentro de cobertura, por favor."
+  );
+}
+
 async function buildAddressConfirmationRequestReply(geocodedAddress) {
   const result = await handleDeliveryToolCall("solicitar_confirmacion_direccion", {
     direccionEntrega: geocodedAddress.formattedAddress,
@@ -393,6 +497,7 @@ module.exports = {
       }
 
       const previousBotMessage = getPreviousBotMessage(recentMessages, message);
+      const previousUserMessage = getPreviousUserMessage(recentMessages, message);
       const pendingFinalOrderAddress = extractFinalOrderAddressFromBotMessage(
         previousBotMessage?.mensaje
       );
@@ -469,14 +574,34 @@ module.exports = {
         }
       }
 
-      if (isGreetingMessage(message) || !looksLikeDeliveryAddress(message)) {
+      const addressSearchQuery = isAddressCorrectionMessage(message)
+        ? buildAddressSearchQuery({
+            message,
+            previousUserMessage,
+          })
+        : null;
+      const shouldTryCorrectionQuery =
+        typeof addressSearchQuery === "string" && addressSearchQuery.length > 0;
+
+      if (
+        isGreetingMessage(message) ||
+        (!looksLikeDeliveryAddress(message) && !shouldTryCorrectionQuery)
+      ) {
         return buildAddressRetryReply();
       }
 
-      const geocodedAddress = await geocodeAddress(message);
+      const geocodedAddress = await geocodeAddress(
+        shouldTryCorrectionQuery ? addressSearchQuery : message
+      );
 
       if (!geocodedAddress.ok || !geocodedAddress.result?.formattedAddress) {
         return buildAddressGeocodeRetryReply();
+      }
+
+      if (!geocodedAddress.result.withinMonterreyMetro) {
+        return buildAddressOutsideMetroReply(
+          geocodedAddress.result.municipality
+        );
       }
 
       const coverage = await findClosestBranchCoverage({

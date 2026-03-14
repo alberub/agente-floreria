@@ -173,21 +173,9 @@ function buildRequestDeliveryAddressConfirmationMessage({
   locationType,
   partialMatch,
 }) {
-  const precisionWarning =
-    partialMatch || (locationType && locationType !== "ROOFTOP")
-      ? " Google Maps la marco como aproximada, asi que necesito tu confirmacion."
-      : "";
-  const coverageMessage =
-    sucursalNombre && Number.isFinite(distanciaMetros)
-      ? ` La sucursal ${sucursalNombre} puede entregarte ahi. Distancia estimada: ${Math.round(
-          distanciaMetros
-        )} m de ${Math.round(radioEntregaMetros || 0)} m disponibles.`
-      : "";
-
   return (
     `Encontre esta direccion en Google Maps: ${direccionEntrega}.` +
-    `${coverageMessage}` +
-    `${precisionWarning} ` +
+    " Tenemos cobertura de envio para esta direccion. " +
     'Si es correcta, responde "si". Si no, responde "no" y comparteme la direccion otra vez.'
   );
 }
@@ -199,15 +187,12 @@ function buildOutOfCoverageMessage({
   radioEntregaMetros,
 }) {
   const branchMessage = sucursalNombre
-    ? ` La sucursal mas cercana es ${sucursalNombre}, a ${Math.round(
-        distanciaMetros || 0
-      )} m.`
+    ? ` La sucursal mas cercana es ${sucursalNombre}.`
     : "";
 
   return (
     `La direccion ${direccionEntrega} esta fuera de nuestra zona de envio.` +
     `${branchMessage} ` +
-    `Nuestro radio actual es de ${Math.round(radioEntregaMetros || 0)} m. ` +
     "Comparteme otra direccion dentro de cobertura, por favor."
   );
 }
