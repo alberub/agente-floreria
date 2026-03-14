@@ -352,6 +352,8 @@ function extractConfirmedAddressFromBotMessage(message) {
   const prefix = "Encontre esta direccion en Google Maps: ";
   const suffix = ". Si es correcta, responde \"si\". Si no, responde \"no\" y comparteme la direccion otra vez.";
   const coverageMarker = ". La sucursal ";
+  const coverageConfirmationMarker =
+    ". Tenemos cobertura de envio para esta direccion.";
   const warningMarker = ". Google Maps la marco como aproximada, asi que necesito tu confirmacion.";
 
   if (!normalized.startsWith(prefix)) {
@@ -370,6 +372,14 @@ function extractConfirmedAddressFromBotMessage(message) {
     const [addressPart] = normalized
       .slice(prefix.length)
       .split(warningMarker, 1);
+
+    return addressPart ? addressPart.trim() : null;
+  }
+
+  if (normalized.includes(coverageConfirmationMarker)) {
+    const [addressPart] = normalized
+      .slice(prefix.length)
+      .split(coverageConfirmationMarker, 1);
 
     return addressPart ? addressPart.trim() : null;
   }

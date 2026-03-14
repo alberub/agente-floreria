@@ -147,8 +147,9 @@ function buildRequestDeliveryAddressMessage(nombreProducto) {
 
 function buildDeliveryAddressConfirmationMessage(direccionEntrega) {
   return (
-    "Gracias. Ya recibi la direccion de entrega: " +
-    `${direccionEntrega}.`
+    "Gracias por tu compra. " +
+    `Tu pedido ha sido registrado con entrega en ${direccionEntrega}. ` +
+    "En breve te compartiremos el seguimiento."
   );
 }
 
