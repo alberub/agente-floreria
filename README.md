@@ -29,6 +29,29 @@ npm install
 npm run dev
 ```
 
+## Despliegue automatico
+
+El repositorio incluye un workflow de GitHub Actions para desplegar al VPS por SSH en cada push a `master`.
+
+Secrets requeridos en GitHub:
+
+- `VPS_HOST`
+- `VPS_USER`
+- `VPS_SSH_KEY`
+
+El servidor debe tener el repo clonado en:
+
+```bash
+/var/www/agente-floreria
+```
+
+Y permisos para ejecutar:
+
+```bash
+./deploy.sh
+docker compose up -d --build
+```
+
 ## Endpoint
 
 `POST /agent/respond`

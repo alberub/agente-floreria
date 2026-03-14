@@ -10,6 +10,32 @@ function normalizeProductText(value) {
     .trim();
 }
 
+function extractSelectionByNumber(message) {
+  const rawMessage = String(message || "").trim();
+  const directSelection = Number.parseInt(rawMessage, 10);
+
+  if (Number.isInteger(directSelection) && directSelection > 0) {
+    return directSelection;
+  }
+
+  const normalizedMessage = normalizeProductText(message);
+  const optionMatch = normalizedMessage.match(
+    /\b(?:opcion|opcion numero|numero|num|no)\s+(\d+)\b/
+  );
+
+  if (optionMatch) {
+    return Number.parseInt(optionMatch[1], 10);
+  }
+
+  const standaloneNumbers = normalizedMessage.match(/\b\d+\b/g);
+
+  if (!standaloneNumbers || standaloneNumbers.length !== 1) {
+    return null;
+  }
+
+  return Number.parseInt(standaloneNumbers[0], 10);
+}
+
 async function getActiveProductsByCategoryId(categoryId) {
   const result = await db.query(
     `
@@ -35,7 +61,7 @@ async function findActiveProductSelection(categoryId, message) {
   const products = await getActiveProductsByCategoryId(categoryId);
   const normalizedMessage = normalizeProductText(message);
   const compactMessage = normalizedMessage.replace(/\s+/g, "");
-  const selectionByNumber = Number.parseInt(String(message || "").trim(), 10);
+  const selectionByNumber = extractSelectionByNumber(message);
   const affirmativeSelectionPatterns = [
     /\bla quiero\b/,
     /\blo quiero\b/,
