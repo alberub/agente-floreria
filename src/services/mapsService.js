@@ -2,19 +2,19 @@ const { mapsApiKey } = require("../config/env");
 
 const GOOGLE_GEOCODE_URL =
   "https://maps.googleapis.com/maps/api/geocode/json";
-const MONTERREY_METRO_MUNICIPALITIES = new Set([
-  "apodaca",
-  "cadereyta jimenez",
-  "garcia",
-  "general escobedo",
-  "guadalupe",
-  "juarez",
-  "monterrey",
-  "san nicolas de los garza",
-  "san pedro garza garcia",
-  "santa catarina",
-  "santiago",
-]);
+const MONTERREY_METRO_MUNICIPALITY_ALIASES = [
+  ["apodaca", "ciudad apodaca"],
+  ["cadereyta jimenez", "cadereyta"],
+  ["garcia"],
+  ["general escobedo", "escobedo"],
+  ["guadalupe"],
+  ["juarez"],
+  ["monterrey"],
+  ["san nicolas de los garza", "san nicolas"],
+  ["san pedro garza garcia", "san pedro"],
+  ["santa catarina"],
+  ["santiago"],
+];
 
 function normalizeLocationName(value) {
   return String(value || "")
@@ -31,6 +31,7 @@ function findAddressComponent(components, type) {
 function getMunicipalityName(components) {
   const locality =
     findAddressComponent(components, "locality") ||
+    findAddressComponent(components, "administrative_area_level_3") ||
     findAddressComponent(components, "administrative_area_level_2");
 
   return locality?.long_name || null;
@@ -46,11 +47,24 @@ function isWithinMonterreyMetro(components) {
     };
   }
 
+  const candidateNames = components
+    .flatMap((component) => [component.long_name, component.short_name])
+    .filter(Boolean)
+    .map((value) => normalizeLocationName(value));
+  const withinMetro = MONTERREY_METRO_MUNICIPALITY_ALIASES.some((aliases) =>
+    aliases.some((alias) =>
+      candidateNames.some(
+        (candidate) =>
+          candidate === alias ||
+          candidate.includes(alias) ||
+          alias.includes(candidate)
+      )
+    )
+  );
+
   return {
     municipality: municipalityName,
-    withinMetro: MONTERREY_METRO_MUNICIPALITIES.has(
-      normalizeLocationName(municipalityName)
-    ),
+    withinMetro,
   };
 }
 
