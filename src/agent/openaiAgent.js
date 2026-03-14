@@ -1,6 +1,9 @@
 const OpenAI = require("openai");
 const { openAiApiKey, openAiModel } = require("../config/env");
 const { handleToolCall } = require("../tools/greetingTools");
+const {
+  handleToolCall: handleDeliveryToolCall,
+} = require("../tools/deliveryTools");
 const { getActiveIntentions } = require("../repositories/intentionRepository");
 const {
   findActiveCategoryByName,
@@ -10,7 +13,11 @@ const {
   findActiveProductSelection,
   getActiveProductsByCategoryId,
 } = require("../repositories/productRepository");
-const { createOrder } = require("../repositories/orderRepository");
+const {
+  createOrder,
+  findLatestPendingOrderByConversationId,
+  updateOrderDeliveryAddress,
+} = require("../repositories/orderRepository");
 const {
   findConversationStateIdByName,
   updateConversationCategory,
@@ -120,10 +127,12 @@ function buildProductListReply(category, products) {
   return `Perfecto, trabajaremos con la categoria ${category.tipoCategoria}. Estas son las opciones disponibles:\n\n${productLines}`;
 }
 
-function buildProductSelectedReply(product) {
-  return `Perfecto, elegiste ${product.nombre} por ${formatMoney(
-    product.precio
-  )}. Ahora comparteme la direccion de entrega, por favor.`;
+async function buildProductSelectedReply(product) {
+  const result = await handleDeliveryToolCall("solicitar_direccion_entrega", {
+    nombreProducto: `${product.nombre} por ${formatMoney(product.precio)}`,
+  });
+
+  return result.mensaje;
 }
 
 function getLastBotMessage(recentMessages) {
@@ -161,6 +170,35 @@ function buildProductSelectionHelpReply(category, products) {
   return `Si deseas continuar, responde con el numero o el nombre de una opcion de ${category.tipoCategoria}.`;
 }
 
+function looksLikeDeliveryAddress(message) {
+  const normalized = String(message || "").trim();
+
+  if (normalized.length < 10) {
+    return false;
+  }
+
+  return /[0-9]/.test(normalized) || normalized.split(/\s+/).length >= 4;
+}
+
+async function buildAddressRetryReply() {
+  const result = await handleDeliveryToolCall("solicitar_direccion_entrega", {
+    nombreProducto: "tu pedido",
+  });
+
+  return (
+    "Aun necesito una direccion valida para continuar. " +
+    result.mensaje.replace("Perfecto, elegiste tu pedido. ", "")
+  );
+}
+
+async function buildAddressConfirmedReply(deliveryAddress) {
+  const result = await handleDeliveryToolCall("confirmar_direccion_entrega", {
+    direccionEntrega: deliveryAddress,
+  });
+
+  return result.mensaje;
+}
+
 module.exports = {
   buildGreetingReply,
   runFloristAgent: async ({
@@ -176,7 +214,40 @@ module.exports = {
       await findConversationStateIdByName("esperando_categoria");
     const waitingProductStateId =
       await findConversationStateIdByName("esperando_producto");
+    const waitingAddressStateId =
+      await findConversationStateIdByName("esperando_direccion");
     const initialStateId = await findConversationStateIdByName("inicio");
+
+    if (Number(conversationStateId) === Number(waitingAddressStateId)) {
+      if (!conversationId) {
+        return "No pude ubicar la conversacion activa para registrar la direccion.";
+      }
+
+      const pendingOrder =
+        await findLatestPendingOrderByConversationId(conversationId);
+
+      if (!pendingOrder) {
+        return "No encontre un pedido pendiente para registrar la direccion de entrega.";
+      }
+
+      if (isGreetingMessage(message) || !looksLikeDeliveryAddress(message)) {
+        return buildAddressRetryReply();
+      }
+
+      const deliveryAddress = String(message || "").trim();
+
+      await updateOrderDeliveryAddress({
+        orderId: pendingOrder.id,
+        deliveryAddress,
+      });
+
+      await updateConversationState({
+        conversationId,
+        stateName: "inicio",
+      });
+
+      return buildAddressConfirmedReply(deliveryAddress);
+    }
 
     if (Number(conversationStateId) === Number(waitingProductStateId)) {
       if (!conversationCategoryId) {
