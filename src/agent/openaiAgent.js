@@ -30,6 +30,30 @@ const {
 } = require("../repositories/conversationRepository");
 
 const client = new OpenAI({ apiKey: openAiApiKey });
+const REQUEST_ZONE_PREFIX =
+  "Para comenzar, comparteme la colonia y municipio de entrega o el codigo postal.";
+const REQUEST_DATE_PREFIX = "Perfecto, si tenemos cobertura en esa zona.";
+const DELIVERY_OPTIONS_PREFIX = "Estas son las opciones de entrega disponibles:";
+const REQUEST_EXACT_ADDRESS_PREFIX = "Perfecto, apartaremos el horario ";
+const FINAL_ORDER_PREFIX = "Corrobora tu pedido:";
+const PRODUCT_LIST_MARKER = "Estas son las opciones disponibles:";
+const REQUEST_ADDRESS_FRAGMENT =
+  "Ahora comparteme la direccion completa de entrega";
+const MONTHS_ES = {
+  enero: 0,
+  febrero: 1,
+  marzo: 2,
+  abril: 3,
+  mayo: 4,
+  junio: 5,
+  julio: 6,
+  agosto: 7,
+  septiembre: 8,
+  setiembre: 8,
+  octubre: 9,
+  noviembre: 10,
+  diciembre: 11,
+};
 
 const GREETING_PATTERNS = [
   /^(hola|buenas|buenos dias|buenas tardes|buenas noches|hey|que tal)[!. ]*$/i,
@@ -115,12 +139,103 @@ function formatMoney(amount) {
   }).format(amount);
 }
 
+function normalizeText(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
 function formatLocalDate(date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
 
   return `${year}-${month}-${day}`;
+}
+
+function startOfLocalDay(date) {
+  const value = new Date(date);
+  value.setHours(0, 0, 0, 0);
+  return value;
+}
+
+function formatHumanDate(date) {
+  return new Intl.DateTimeFormat("es-MX", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  }).format(date);
+}
+
+function parseRequestedDeliveryDate(message) {
+  const normalized = normalizeText(message);
+  const today = startOfLocalDay(new Date());
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized.includes("pasado manana")) {
+    const date = new Date(today);
+    date.setDate(date.getDate() + 2);
+    return { date, label: formatHumanDate(date) };
+  }
+
+  if (normalized.includes("manana")) {
+    const date = new Date(today);
+    date.setDate(date.getDate() + 1);
+    return { date, label: formatHumanDate(date) };
+  }
+
+  if (normalized.includes("hoy")) {
+    return { date: today, label: formatHumanDate(today) };
+  }
+
+  const isoMatch = normalized.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+
+  if (isoMatch) {
+    const [, year, month, day] = isoMatch;
+    const date = new Date(Number(year), Number(month) - 1, Number(day));
+    return Number.isNaN(date.getTime())
+      ? null
+      : { date: startOfLocalDay(date), label: formatHumanDate(date) };
+  }
+
+  const slashMatch = normalized.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?\b/);
+
+  if (slashMatch) {
+    const [, day, month, year] = slashMatch;
+    const date = new Date(
+      Number(year || today.getFullYear()),
+      Number(month) - 1,
+      Number(day)
+    );
+    return Number.isNaN(date.getTime())
+      ? null
+      : { date: startOfLocalDay(date), label: formatHumanDate(date) };
+  }
+
+  const monthMatch = normalized.match(
+    /\b(\d{1,2})\s+de\s+([a-z]+)(?:\s+de\s+(\d{4}))?\b|\b(\d{1,2})\s+([a-z]+)(?:\s+(\d{4}))?\b/
+  );
+
+  if (monthMatch) {
+    const day = monthMatch[1] || monthMatch[4];
+    const monthName = monthMatch[2] || monthMatch[5];
+    const year = monthMatch[3] || monthMatch[6] || today.getFullYear();
+    const monthIndex = MONTHS_ES[monthName];
+
+    if (monthIndex !== undefined) {
+      const date = new Date(Number(year), monthIndex, Number(day));
+      return Number.isNaN(date.getTime())
+        ? null
+        : { date: startOfLocalDay(date), label: formatHumanDate(date) };
+    }
+  }
+
+  return null;
 }
 
 function parseWindowDate(value) {
@@ -180,9 +295,42 @@ function buildProductListReply(category, products) {
   return `Perfecto, trabajaremos con la categoria ${category.tipoCategoria}. Estas son las opciones disponibles:\n\n${productLines}`;
 }
 
+function buildProductListForRequestedDateReply(category, products, requestedDate) {
+  const baseReply = buildProductListReply(category, products);
+
+  if (!requestedDate?.label) {
+    return baseReply;
+  }
+
+  return `Perfecto, para ${requestedDate.label} trabajaremos con la categoria ${category.tipoCategoria}. Estas son las opciones disponibles:\n\n${products
+    .map((product, index) => {
+      const description = product.descripcion ? ` - ${product.descripcion}` : "";
+      return `${index + 1}. ${product.nombre} - ${formatMoney(product.precio)}${description}`;
+    })
+    .join("\n")}`;
+}
+
 async function buildProductSelectedReply(product) {
-  const result = await handleDeliveryToolCall("solicitar_direccion_entrega", {
-    nombreProducto: `${product.nombre} por ${formatMoney(product.precio)}`,
+  const result = await handleDeliveryToolCall("solicitar_zona_entrega", {});
+
+  return result.mensaje;
+}
+
+async function buildCoverageZoneRequestReply() {
+  const result = await handleDeliveryToolCall("solicitar_zona_entrega", {});
+
+  return result.mensaje;
+}
+
+async function buildDeliveryDateRequestReply() {
+  const result = await handleDeliveryToolCall("solicitar_fecha_entrega", {});
+
+  return result.mensaje;
+}
+
+async function buildExactAddressRequestReply(windowLabel) {
+  const result = await handleDeliveryToolCall("solicitar_horario_entrega", {
+    horarioEntrega: windowLabel,
   });
 
   return result.mensaje;
@@ -194,6 +342,30 @@ function getLastBotMessage(recentMessages) {
 
 function getLastUserMessage(recentMessages) {
   return [...(recentMessages || [])].reverse().find((item) => item.rol === "user");
+}
+
+function getLatestUserReplyAfterBotPrefix(recentMessages, prefix) {
+  const messages = [...(recentMessages || [])];
+  let latestReply = null;
+  let waitingReply = false;
+
+  for (const item of messages) {
+    if (
+      item.rol === "bot" &&
+      typeof item.mensaje === "string" &&
+      item.mensaje.startsWith(prefix)
+    ) {
+      waitingReply = true;
+      continue;
+    }
+
+    if (waitingReply && item.rol === "user") {
+      latestReply = item.mensaje;
+      waitingReply = false;
+    }
+  }
+
+  return latestReply;
 }
 
 function getPreviousBotMessage(recentMessages, currentMessage) {
@@ -245,25 +417,7 @@ function getPreviousUserMessage(recentMessages, currentMessage) {
 }
 
 function getProductSelectionMessage(recentMessages) {
-  const messages = [...(recentMessages || [])];
-
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const item = messages[index];
-
-    if (
-      item.rol === "bot" &&
-      typeof item.mensaje === "string" &&
-      item.mensaje.includes("Ahora comparteme la direccion completa de entrega")
-    ) {
-      for (let lookup = index - 1; lookup >= 0; lookup -= 1) {
-        if (messages[lookup].rol === "user") {
-          return messages[lookup].mensaje;
-        }
-      }
-    }
-  }
-
-  return null;
+  return getLatestUserReplyAfterBotPrefix(recentMessages, `Perfecto, trabajaremos con la categoria`);
 }
 
 function getLatestBotMessageByPrefix(recentMessages, prefix) {
@@ -457,7 +611,7 @@ function extractConfirmedAddressFromBotMessage(message) {
 
 function extractFinalOrderAddressFromBotMessage(message) {
   const normalized = String(message || "").trim();
-  const prefix = "Corrobora tu pedido:\n";
+  const prefix = `${FINAL_ORDER_PREFIX}\n`;
   const addressLinePrefix = "Direccion de entrega: ";
   const confirmationLine =
     'Si todo es correcto, responde "si". Si deseas cambiar algo, responde "no".';
@@ -477,6 +631,40 @@ function extractFinalOrderAddressFromBotMessage(message) {
   return addressLine.slice(addressLinePrefix.length).trim();
 }
 
+function extractFinalOrderWindowFromBotMessage(message) {
+  const normalized = String(message || "").trim();
+  const prefix = `${FINAL_ORDER_PREFIX}\n`;
+  const windowLinePrefix = "Horario de entrega: ";
+  const confirmationLine =
+    'Si todo es correcto, responde "si". Si deseas cambiar algo, responde "no".';
+
+  if (!normalized.startsWith(prefix) || !normalized.includes(confirmationLine)) {
+    return null;
+  }
+
+  const windowLine = normalized
+    .split("\n")
+    .find((line) => line.startsWith(windowLinePrefix));
+
+  if (!windowLine) {
+    return null;
+  }
+
+  return windowLine.slice(windowLinePrefix.length).trim();
+}
+
+function extractSelectedWindowFromBotMessage(message) {
+  const normalized = String(message || "").trim();
+
+  if (!normalized.startsWith(REQUEST_EXACT_ADDRESS_PREFIX)) {
+    return null;
+  }
+
+  const withoutPrefix = normalized.slice(REQUEST_EXACT_ADDRESS_PREFIX.length);
+  const [windowLabel] = withoutPrefix.split(". Ahora comparteme la direccion completa", 1);
+  return windowLabel ? windowLabel.trim() : null;
+}
+
 function extractDeliveryWindowSelection(message) {
   const match = String(message || "").match(/\b(\d+)\b/);
 
@@ -489,7 +677,7 @@ function extractDeliveryWindowSelection(message) {
 }
 
 function getLatestFinalOrderAddressFromRecentMessages(recentMessages) {
-  const botMessage = getLatestBotMessageByPrefix(recentMessages, "Corrobora tu pedido:");
+  const botMessage = getLatestBotMessageByPrefix(recentMessages, FINAL_ORDER_PREFIX);
 
   if (!botMessage) {
     return null;
@@ -498,16 +686,57 @@ function getLatestFinalOrderAddressFromRecentMessages(recentMessages) {
   return extractFinalOrderAddressFromBotMessage(botMessage.mensaje);
 }
 
-function buildEarliestDeliveryDateTime({ product, coverage }) {
+function getLatestFinalOrderWindowFromRecentMessages(recentMessages) {
+  const botMessage = getLatestBotMessageByPrefix(recentMessages, FINAL_ORDER_PREFIX);
+
+  if (!botMessage) {
+    return null;
+  }
+
+  return extractFinalOrderWindowFromBotMessage(botMessage.mensaje);
+}
+
+function getLatestSelectedWindowFromRecentMessages(recentMessages) {
+  const botMessage = getLatestBotMessageByPrefix(
+    recentMessages,
+    REQUEST_EXACT_ADDRESS_PREFIX
+  );
+
+  if (!botMessage) {
+    return null;
+  }
+
+  return extractSelectedWindowFromBotMessage(botMessage.mensaje);
+}
+
+function getLatestRequestedDateFromRecentMessages(recentMessages) {
+  const reply = getLatestUserReplyAfterBotPrefix(recentMessages, REQUEST_DATE_PREFIX);
+  return reply ? parseRequestedDeliveryDate(reply) : null;
+}
+
+function getLatestPreliminaryZoneFromRecentMessages(recentMessages) {
+  return getLatestUserReplyAfterBotPrefix(recentMessages, REQUEST_ZONE_PREFIX);
+}
+
+function buildEarliestDeliveryDateTime({ product, coverage, requestedDate }) {
   const now = new Date();
   const prepMinutes =
     Number(product?.tiempoPreparacionMin || 60) +
     Number(coverage?.bufferLogisticoMin || 30);
-
+  const targetDate = requestedDate ? startOfLocalDay(requestedDate) : startOfLocalDay(now);
   const earliest = new Date(now.getTime() + prepMinutes * 60 * 1000);
 
   if (product?.permiteEntregaMismoDia === false) {
     earliest.setDate(earliest.getDate() + 1);
+    earliest.setHours(0, 0, 0, 0);
+  }
+
+  if (targetDate > startOfLocalDay(now)) {
+    earliest.setFullYear(
+      targetDate.getFullYear(),
+      targetDate.getMonth(),
+      targetDate.getDate()
+    );
     earliest.setHours(0, 0, 0, 0);
   }
 
@@ -526,6 +755,7 @@ async function buildDeliveryOptionsFromContext({
   recentMessages,
   conversationCategoryId,
   deliveryAddress,
+  requestedDate,
 }) {
   const selectedProduct = await getSelectedProductFromRecentMessages(
     recentMessages,
@@ -554,12 +784,14 @@ async function buildDeliveryOptionsFromContext({
   const earliest = buildEarliestDeliveryDateTime({
     product: selectedProduct,
     coverage,
+    requestedDate,
   });
   const windows = await findAvailableDeliveryWindows({
     sucursalId: coverage.id,
     earliestDate: earliest.date,
     earliestTime: earliest.time,
     limit: 3,
+    exactDate: Boolean(requestedDate),
   });
 
   return {
@@ -567,6 +799,25 @@ async function buildDeliveryOptionsFromContext({
     coverage,
     windows,
   };
+}
+
+async function buildDeliveryOptionsFromRecentSelections({
+  recentMessages,
+  conversationCategoryId,
+}) {
+  const preliminaryZone = getLatestPreliminaryZoneFromRecentMessages(recentMessages);
+  const requestedDate = getLatestRequestedDateFromRecentMessages(recentMessages);
+
+  if (!preliminaryZone || !requestedDate?.date) {
+    return null;
+  }
+
+  return buildDeliveryOptionsFromContext({
+    recentMessages,
+    conversationCategoryId,
+    deliveryAddress: preliminaryZone,
+    requestedDate: requestedDate.date,
+  });
 }
 
 async function buildAddressRetryReply() {
@@ -620,19 +871,24 @@ async function buildAddressOutOfCoverageReply(geocodedAddress) {
   return result.mensaje;
 }
 
-async function buildAddressConfirmedReply(deliveryAddress) {
+async function buildAddressConfirmedReply() {
   const result = await handleDeliveryToolCall("confirmar_direccion_entrega", {
-    direccionEntrega: deliveryAddress,
+    direccionEntrega: null,
   });
 
   return result.mensaje;
 }
 
-async function buildFinalOrderConfirmationReply({ product, deliveryAddress }) {
+async function buildFinalOrderConfirmationReply({
+  product,
+  deliveryAddress,
+  deliveryWindowLabel,
+}) {
   const result = await handleDeliveryToolCall("solicitar_confirmacion_pedido", {
     nombreProducto: product.nombre,
     precioProducto: formatMoney(product.precio),
     direccionEntrega: deliveryAddress,
+    horarioEntrega: deliveryWindowLabel,
   });
 
   return result.mensaje;
@@ -674,34 +930,144 @@ module.exports = {
 
       const previousBotMessage = getPreviousBotMessage(recentMessages, message);
       const previousUserMessage = getPreviousUserMessage(recentMessages, message);
-      const latestFinalOrderAddress =
-        getLatestFinalOrderAddressFromRecentMessages(recentMessages);
       const pendingFinalOrderAddress = extractFinalOrderAddressFromBotMessage(
+        previousBotMessage?.mensaje
+      );
+      const pendingFinalOrderWindow = extractFinalOrderWindowFromBotMessage(
         previousBotMessage?.mensaje
       );
       const pendingConfirmedAddress = extractConfirmedAddressFromBotMessage(
         previousBotMessage?.mensaje
       );
-      const isChoosingDeliveryWindow =
-        previousBotMessage?.mensaje?.startsWith(
-          "Estas son las opciones de entrega disponibles:"
-        ) && !!latestFinalOrderAddress;
+      const pendingSelectedWindow = extractSelectedWindowFromBotMessage(
+        previousBotMessage?.mensaje
+      );
 
-      if (isChoosingDeliveryWindow) {
+      if (previousBotMessage?.mensaje?.startsWith(DELIVERY_OPTIONS_PREFIX)) {
         const optionIndex = extractDeliveryWindowSelection(message);
 
         if (optionIndex === null) {
           return 'Responde con el numero de la opcion de entrega que prefieras.';
         }
 
-        const deliveryContext = await buildDeliveryOptionsFromContext({
+        const deliveryContext = await buildDeliveryOptionsFromRecentSelections({
           recentMessages,
           conversationCategoryId,
-          deliveryAddress: latestFinalOrderAddress,
         });
 
         if (!deliveryContext || deliveryContext.windows.length === 0) {
-          return "Por ahora no encontre horarios disponibles para esa direccion. Intenta con otra direccion o mas tarde.";
+          return "Por ahora no encontre horarios disponibles para la fecha solicitada. Intenta con otra fecha o mas tarde.";
+        }
+
+        const selectedWindow = deliveryContext.windows[optionIndex];
+
+        if (!selectedWindow) {
+          return 'No reconoci esa opcion. Responde con el numero de una de las opciones de entrega disponibles.';
+        }
+
+        return buildExactAddressRequestReply(
+          formatDeliveryWindowLabel(selectedWindow)
+        );
+      }
+
+      if (pendingFinalOrderAddress && isAffirmativeMessage(message)) {
+        const deliveryContext = await buildDeliveryOptionsFromRecentSelections({
+          recentMessages,
+          conversationCategoryId,
+        });
+
+        if (!deliveryContext || deliveryContext.windows.length === 0) {
+          return "Por ahora no encontre horarios disponibles para la fecha solicitada. Intenta con otra fecha o mas tarde.";
+        }
+
+        const selectedWindow = deliveryContext.windows.find(
+          (window) => formatDeliveryWindowLabel(window) === pendingFinalOrderWindow
+        );
+
+        if (!selectedWindow) {
+          return "El horario que habias elegido ya no esta disponible. Voy a mostrarte las opciones actualizadas.\n\n" +
+            (await buildDeliveryOptionsReply(deliveryContext.windows));
+        }
+
+        const reservedWindow = await reserveDeliveryWindow(selectedWindow.id);
+
+        if (!reservedWindow) {
+          return "Esa opcion ya se ocupo. Voy a mostrarte las opciones disponibles de nuevo.\n\n" +
+            (await buildDeliveryOptionsReply(deliveryContext.windows));
+        }
+
+        if (!customerId) {
+          throw new Error(
+            "Faltan datos del cliente para crear el pedido programado."
+          );
+        }
+
+        await createOrder({
+          customerId,
+          productId: deliveryContext.selectedProduct.id,
+          conversationId,
+          deliveryAddress: pendingFinalOrderAddress,
+          branchId: deliveryContext.coverage.id,
+          deliveryDate: reservedWindow.fecha,
+          deliveryStartTime: reservedWindow.horaInicio,
+          deliveryEndTime: reservedWindow.horaFin,
+          total: deliveryContext.selectedProduct.precio,
+        });
+
+        await updateConversationState({
+          conversationId,
+          stateName: "inicio",
+        });
+
+        return buildAddressConfirmedReply();
+      }
+
+      if (pendingFinalOrderAddress && isNegativeMessage(message)) {
+        return "De acuerdo. Comparteme la direccion corregida para continuar.";
+      }
+
+      if (pendingConfirmedAddress && isAffirmativeMessage(message)) {
+        const selectedProduct = await getSelectedProductFromRecentMessages(
+          recentMessages,
+          conversationCategoryId
+        );
+
+        if (!selectedProduct) {
+          return "No pude recuperar el producto seleccionado para corroborar el pedido.";
+        }
+
+        const selectedWindowLabel =
+          getLatestSelectedWindowFromRecentMessages(recentMessages);
+
+        if (!selectedWindowLabel) {
+          return "No pude recuperar el horario seleccionado. Voy a mostrarte las opciones disponibles de nuevo.";
+        }
+
+        return buildFinalOrderConfirmationReply({
+          product: selectedProduct,
+          deliveryAddress: pendingConfirmedAddress,
+          deliveryWindowLabel: selectedWindowLabel,
+        });
+      }
+
+      if (pendingSelectedWindow && isNegativeMessage(message)) {
+        return "De acuerdo. Responde con el numero del horario que prefieras.";
+      }
+
+      if (false && previousBotMessage?.mensaje?.startsWith(DELIVERY_OPTIONS_PREFIX)) {
+        const optionIndex = extractDeliveryWindowSelection(message);
+
+        if (optionIndex === null) {
+          return 'Responde con el numero de la opcion de entrega que prefieras.';
+        }
+
+        const deliveryContext = await buildDeliveryOptionsFromRecentSelections({
+          recentMessages,
+          conversationCategoryId,
+        });
+
+        if (!deliveryContext || deliveryContext.windows.length === 0) {
+          return "Por ahora no encontre horarios disponibles para la fecha solicitada. Intenta con otra fecha o mas tarde.";
         }
 
         const selectedWindow = deliveryContext.windows[optionIndex];
@@ -743,7 +1109,7 @@ module.exports = {
         return buildAddressConfirmedReply(latestFinalOrderAddress);
       }
 
-      if (pendingFinalOrderAddress && isAffirmativeMessage(message)) {
+      if (false && pendingFinalOrderAddress && isAffirmativeMessage(message)) {
         const deliveryContext = await buildDeliveryOptionsFromContext({
           recentMessages,
           conversationCategoryId,
@@ -757,7 +1123,7 @@ module.exports = {
         return buildDeliveryOptionsReply(deliveryContext.windows);
       }
 
-      if (pendingFinalOrderAddress && isNegativeMessage(message)) {
+      if (false && pendingFinalOrderAddress && isNegativeMessage(message)) {
         return (
           "De acuerdo. Comparteme la direccion corregida o el numero/nombre del producto que deseas cambiar."
         );
@@ -767,7 +1133,7 @@ module.exports = {
         return buildAddressRetryReply();
       }
 
-      if (pendingConfirmedAddress && isAffirmativeMessage(message)) {
+      if (false && pendingConfirmedAddress && isAffirmativeMessage(message)) {
         const selectedProduct = await getSelectedProductFromRecentMessages(
           recentMessages,
           conversationCategoryId
@@ -783,7 +1149,7 @@ module.exports = {
         });
       }
 
-      if (conversationCategoryId) {
+      if (false && conversationCategoryId) {
         const replacementProduct = await findActiveProductSelection(
           conversationCategoryId,
           message
@@ -857,10 +1223,83 @@ module.exports = {
       }
 
       const products = await getActiveProductsByCategoryId(selectedCategory.id);
+      const previousBotMessage = getPreviousBotMessage(recentMessages, message);
+
+      if (previousBotMessage?.mensaje?.startsWith(REQUEST_ZONE_PREFIX)) {
+        if (isGreetingMessage(message) || String(message || "").trim().length < 3) {
+          return buildCoverageZoneRequestReply();
+        }
+
+        const geocodedZone = await geocodeAddress(message);
+
+        if (!geocodedZone.ok || !geocodedZone.result?.formattedAddress) {
+          return "No pude validar esa zona. Comparteme la colonia y municipio o el codigo postal de entrega.";
+        }
+
+        if (!geocodedZone.result.withinMonterreyMetro) {
+          return buildAddressOutsideMetroReply(geocodedZone.result.municipality);
+        }
+
+        const coverage = await findClosestBranchCoverage({
+          lat: geocodedZone.result.location.lat,
+          lng: geocodedZone.result.location.lng,
+        });
+
+        if (!coverage || !coverage.dentroDeCobertura) {
+          geocodedZone.result.coverage = coverage;
+          return buildAddressOutOfCoverageReply(geocodedZone.result);
+        }
+
+        return buildDeliveryDateRequestReply();
+      }
+
+      if (previousBotMessage?.mensaje?.startsWith(REQUEST_DATE_PREFIX)) {
+        const requestedDate = parseRequestedDeliveryDate(message);
+
+        if (!requestedDate) {
+          return "No pude identificar la fecha deseada. Responde, por ejemplo, hoy, manana o una fecha como 20/03/2026.";
+        }
+
+        return buildProductListForRequestedDateReply(
+          selectedCategory,
+          products,
+          requestedDate
+        );
+      }
+
       const selectedProduct = await findActiveProductSelection(
         selectedCategory.id,
         message
       );
+
+      if (selectedProduct) {
+        if (!customerId || !conversationId) {
+          throw new Error(
+            "Faltan datos de cliente o conversacion para continuar con la compra."
+          );
+        }
+
+        await updateConversationState({
+          conversationId,
+          stateName: "esperando_direccion",
+        });
+
+        const deliveryContext = await buildDeliveryOptionsFromRecentSelections({
+          recentMessages,
+          conversationCategoryId,
+        });
+
+        if (!deliveryContext || deliveryContext.windows.length === 0) {
+          await updateConversationState({
+            conversationId,
+            stateName: "esperando_producto",
+          });
+
+          return "Por ahora no encontre horarios disponibles para la fecha solicitada con ese producto. Comparteme otra fecha para intentar de nuevo.";
+        }
+
+        return buildDeliveryOptionsReply(deliveryContext.windows);
+      }
 
       if (!selectedProduct) {
         if (isGreetingMessage(message) || isAvailabilityQuestion(message)) {
@@ -878,7 +1317,15 @@ module.exports = {
           return buildProductSelectionHelpReply(selectedCategory, products);
         }
 
-        return buildProductListReply(selectedCategory, products);
+        const requestedDate = getLatestRequestedDateFromRecentMessages(recentMessages);
+
+        return requestedDate
+          ? buildProductListForRequestedDateReply(
+              selectedCategory,
+              products,
+              requestedDate
+            )
+          : buildCoverageZoneRequestReply();
       }
 
       if (!customerId || !conversationId) {
@@ -911,9 +1358,7 @@ module.exports = {
         stateName: "esperando_producto",
       });
 
-      const products = await getActiveProductsByCategoryId(matchedCategory.id);
-
-      return buildProductListReply(matchedCategory, products);
+      return buildCoverageZoneRequestReply();
     }
 
     const activeIntentions = await getActiveIntentions();
@@ -949,11 +1394,7 @@ module.exports = {
         stateName: "esperando_producto",
       });
 
-      const products = await getActiveProductsByCategoryId(
-        matchedCategoryFromFreeText.id
-      );
-
-      return buildProductListReply(matchedCategoryFromFreeText, products);
+      return buildCoverageZoneRequestReply();
     }
 
     if (

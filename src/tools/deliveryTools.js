@@ -2,6 +2,32 @@ const toolDefinitions = [
   {
     type: "function",
     function: {
+      name: "solicitar_zona_entrega",
+      description:
+        "Solicita al cliente una zona preliminar de entrega para validar cobertura inicial.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "solicitar_fecha_entrega",
+      description:
+        "Solicita al cliente el dia deseado de entrega despues de validar la zona preliminar.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "solicitar_direccion_entrega",
       description:
         "Solicita al cliente la direccion completa de entrega despues de elegir un producto.",
@@ -80,6 +106,25 @@ const toolDefinitions = [
   {
     type: "function",
     function: {
+      name: "solicitar_horario_entrega",
+      description:
+        "Confirma el horario seleccionado y solicita la direccion final de entrega.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          horarioEntrega: {
+            type: "string",
+            description: "Horario de entrega seleccionado por el cliente.",
+          },
+        },
+        required: ["horarioEntrega"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "solicitar_confirmacion_pedido",
       description:
         "Resume el producto y la direccion para pedir la confirmacion final del pedido.",
@@ -99,8 +144,17 @@ const toolDefinitions = [
             type: "string",
             description: "Direccion de entrega confirmada.",
           },
+          horarioEntrega: {
+            type: "string",
+            description: "Horario de entrega confirmado.",
+          },
         },
-        required: ["nombreProducto", "precioProducto", "direccionEntrega"],
+        required: [
+          "nombreProducto",
+          "precioProducto",
+          "direccionEntrega",
+          "horarioEntrega",
+        ],
       },
     },
   },
@@ -171,10 +225,31 @@ function buildRequestDeliveryAddressMessage(nombreProducto) {
   );
 }
 
-function buildDeliveryAddressConfirmationMessage(direccionEntrega) {
+function buildRequestCoverageZoneMessage() {
+  return (
+    "Para comenzar, comparteme la colonia y municipio de entrega o el codigo postal. " +
+    "Con eso valido primero si tenemos cobertura en tu zona."
+  );
+}
+
+function buildRequestDeliveryDateMessage() {
+  return (
+    "Perfecto, si tenemos cobertura en esa zona. " +
+    "Ahora indicame para que dia deseas la entrega. Puedes responder, por ejemplo, hoy, manana o una fecha especifica."
+  );
+}
+
+function buildRequestDeliveryWindowAddressMessage(horarioEntrega) {
+  return (
+    `Perfecto, apartaremos el horario ${horarioEntrega}. ` +
+    "Ahora comparteme la direccion completa de entrega, por favor. Incluye calle, numero, colonia y referencias si las tienes."
+  );
+}
+
+function buildDeliveryAddressConfirmationMessage() {
   return (
     "Gracias por tu compra. " +
-    `Tu pedido ha sido registrado con entrega en ${direccionEntrega}. ` +
+    "Tu pedido ha sido registrado correctamente. " +
     "En breve te compartiremos el seguimiento."
   );
 }
@@ -183,10 +258,12 @@ function buildFinalOrderConfirmationMessage({
   nombreProducto,
   precioProducto,
   direccionEntrega,
+  horarioEntrega,
 }) {
   return (
     "Corrobora tu pedido:\n" +
     `Producto: ${nombreProducto} - ${precioProducto}\n` +
+    `Horario de entrega: ${horarioEntrega}\n` +
     `Direccion de entrega: ${direccionEntrega}\n\n` +
     'Si todo es correcto, responde "si". Si deseas cambiar algo, responde "no".'
   );
@@ -237,10 +314,31 @@ function buildDeliveryOptionsMessage(opciones) {
 }
 
 async function handleToolCall(toolName, args) {
+  if (toolName === "solicitar_zona_entrega") {
+    return {
+      ok: true,
+      mensaje: buildRequestCoverageZoneMessage(),
+    };
+  }
+
+  if (toolName === "solicitar_fecha_entrega") {
+    return {
+      ok: true,
+      mensaje: buildRequestDeliveryDateMessage(),
+    };
+  }
+
   if (toolName === "solicitar_direccion_entrega") {
     return {
       ok: true,
       mensaje: buildRequestDeliveryAddressMessage(args.nombreProducto),
+    };
+  }
+
+  if (toolName === "solicitar_horario_entrega") {
+    return {
+      ok: true,
+      mensaje: buildRequestDeliveryWindowAddressMessage(args.horarioEntrega),
     };
   }
 
@@ -277,6 +375,7 @@ async function handleToolCall(toolName, args) {
         nombreProducto: args.nombreProducto,
         precioProducto: args.precioProducto,
         direccionEntrega: args.direccionEntrega,
+        horarioEntrega: args.horarioEntrega,
       }),
     };
   }
@@ -291,7 +390,7 @@ async function handleToolCall(toolName, args) {
   if (toolName === "confirmar_direccion_entrega") {
     return {
       ok: true,
-      mensaje: buildDeliveryAddressConfirmationMessage(args.direccionEntrega),
+      mensaje: buildDeliveryAddressConfirmationMessage(),
     };
   }
 

@@ -42,9 +42,21 @@ async function findAvailableDeliveryWindows({
   earliestDate,
   earliestTime,
   limit = 3,
+  exactDate = false,
 }) {
-  const result = await db.query(
+  const query = exactDate
+    ? `
+      SELECT id, sucursal_id, fecha, hora_inicio, hora_fin, capacidad_maxima, capacidad_reservada, estado
+      FROM public.ventanas_entrega
+      WHERE sucursal_id = $1
+        AND estado IN ('disponible', 'seed')
+        AND capacidad_reservada < capacidad_maxima
+        AND fecha = $2
+        AND hora_inicio >= $3
+      ORDER BY fecha ASC, hora_inicio ASC
+      LIMIT $4
     `
+    : `
       SELECT id, sucursal_id, fecha, hora_inicio, hora_fin, capacidad_maxima, capacidad_reservada, estado
       FROM public.ventanas_entrega
       WHERE sucursal_id = $1
@@ -56,9 +68,9 @@ async function findAvailableDeliveryWindows({
         )
       ORDER BY fecha ASC, hora_inicio ASC
       LIMIT $4
-    `,
-    [sucursalId, earliestDate, earliestTime, limit]
-  );
+    `;
+
+  const result = await db.query(query, [sucursalId, earliestDate, earliestTime, limit]);
 
   return result.rows.map(mapWindow);
 }
