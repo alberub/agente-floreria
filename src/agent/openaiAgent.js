@@ -460,7 +460,25 @@ function getPreviousUserMessage(recentMessages, currentMessage) {
 }
 
 function getProductSelectionMessage(recentMessages) {
-  return getLatestUserReplyAfterBotPrefix(recentMessages, `Perfecto, trabajaremos con la categoria`);
+  const messages = [...(recentMessages || [])];
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const item = messages[index];
+
+    if (
+      item.rol === "bot" &&
+      typeof item.mensaje === "string" &&
+      item.mensaje.includes(PRODUCT_LIST_MARKER)
+    ) {
+      for (let lookup = index + 1; lookup < messages.length; lookup += 1) {
+        if (messages[lookup].rol === "user") {
+          return messages[lookup].mensaje;
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 function getLatestBotMessageByPrefix(recentMessages, prefix) {
