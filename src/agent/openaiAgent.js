@@ -123,8 +123,37 @@ function formatLocalDate(date) {
   return `${year}-${month}-${day}`;
 }
 
+function parseWindowDate(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value;
+  }
+
+  const normalized = String(value || "").trim();
+
+  if (!normalized) {
+    return null;
+  }
+
+  const dateOnlyMatch = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (dateOnlyMatch) {
+    const [, year, month, day] = dateOnlyMatch;
+    return new Date(Number(year), Number(month) - 1, Number(day), 12, 0, 0, 0);
+  }
+
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 function formatDeliveryWindowLabel(window) {
-  const date = new Date(`${window.fecha}T12:00:00`);
+  const date = parseWindowDate(window.fecha);
+
+  if (!date) {
+    return `de ${String(window.horaInicio).slice(0, 5)} a ${String(
+      window.horaFin
+    ).slice(0, 5)}`;
+  }
+
   const dateLabel = new Intl.DateTimeFormat("es-MX", {
     weekday: "long",
     day: "numeric",
