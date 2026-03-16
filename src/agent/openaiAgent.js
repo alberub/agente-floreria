@@ -626,6 +626,12 @@ function isNegativeMessage(message) {
   );
 }
 
+function isFlexibleAffirmativeMessage(message) {
+  return /^(si|s[ií]|si es correcto|s[ií],?\s*es correcto|correcto|es correcto|confirmo|ok|okay)$/i.test(
+    String(message || "").trim()
+  );
+}
+
 function extractConfirmedAddressFromBotMessage(message) {
   const normalized = String(message || "").trim();
   const prefix = "Encontre esta direccion en Google Maps: ";
@@ -1026,7 +1032,7 @@ module.exports = {
         );
       }
 
-      if (pendingFinalOrderAddress && isAffirmativeMessage(message)) {
+      if (pendingFinalOrderAddress && isFlexibleAffirmativeMessage(message)) {
         const deliveryContext = await buildDeliveryOptionsFromRecentSelections({
           recentMessages,
           conversationCategoryId,
@@ -1082,7 +1088,7 @@ module.exports = {
         return "De acuerdo. Comparteme la direccion corregida para continuar.";
       }
 
-      if (pendingConfirmedAddress && isAffirmativeMessage(message)) {
+      if (pendingConfirmedAddress && isFlexibleAffirmativeMessage(message)) {
         const selectedProduct = await getSelectedProductFromRecentMessages(
           recentMessages,
           conversationCategoryId
@@ -1110,7 +1116,7 @@ module.exports = {
         return "De acuerdo. Responde con el numero del horario que prefieras.";
       }
 
-      if (false && previousBotMessage?.mensaje?.startsWith(DELIVERY_OPTIONS_PREFIX)) {
+      /* Legacy flow removed
         const optionIndex = extractDeliveryWindowSelection(message);
 
         if (optionIndex === null) {
@@ -1165,55 +1171,10 @@ module.exports = {
         return buildAddressConfirmedReply(latestFinalOrderAddress);
       }
 
-      if (false && pendingFinalOrderAddress && isAffirmativeMessage(message)) {
-        const deliveryContext = await buildDeliveryOptionsFromContext({
-          recentMessages,
-          conversationCategoryId,
-          deliveryAddress: pendingFinalOrderAddress,
-        });
-
-        if (!deliveryContext || deliveryContext.windows.length === 0) {
-          return "Por ahora no encontre horarios disponibles para esa direccion. Comparteme otra direccion o intenta mas tarde.";
-        }
-
-        return buildDeliveryOptionsReply(deliveryContext.windows);
-      }
-
-      if (false && pendingFinalOrderAddress && isNegativeMessage(message)) {
-        return (
-          "De acuerdo. Comparteme la direccion corregida o el numero/nombre del producto que deseas cambiar."
-        );
-      }
+      */
 
       if (pendingConfirmedAddress && isNegativeMessage(message)) {
         return buildAddressRetryReply();
-      }
-
-      if (false && pendingConfirmedAddress && isAffirmativeMessage(message)) {
-        const selectedProduct = await getSelectedProductFromRecentMessages(
-          recentMessages,
-          conversationCategoryId
-        );
-
-        if (!selectedProduct) {
-          return "No pude recuperar el producto seleccionado para corroborar el pedido.";
-        }
-
-        return buildFinalOrderConfirmationReply({
-          product: selectedProduct,
-          deliveryAddress: pendingConfirmedAddress,
-        });
-      }
-
-      if (false && conversationCategoryId) {
-        const replacementProduct = await findActiveProductSelection(
-          conversationCategoryId,
-          message
-        );
-
-        if (replacementProduct) {
-          return buildProductSelectedReply(replacementProduct);
-        }
       }
 
       const addressSearchQuery = isAddressCorrectionMessage(message)
