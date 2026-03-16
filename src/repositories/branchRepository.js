@@ -7,6 +7,7 @@ async function findClosestBranchCoverage({ lat, lng }) {
         id,
         nombre,
         radio_entrega_metros,
+        buffer_logistico_min,
         ST_Distance(
           ubicacion,
           ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
@@ -33,6 +34,7 @@ async function findClosestBranchCoverage({ lat, lng }) {
     id: Number(row.id),
     nombre: String(row.nombre || "").trim(),
     radioEntregaMetros: Number(row.radio_entrega_metros || 0),
+    bufferLogisticoMin: Number(row.buffer_logistico_min || 30),
     distanciaMetros: Number(row.distancia_metros || 0),
     dentroDeCobertura: Boolean(row.dentro_de_cobertura),
   };

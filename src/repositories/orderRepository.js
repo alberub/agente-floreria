@@ -18,6 +18,11 @@ async function createOrder({
   productId,
   conversationId,
   deliveryAddress = null,
+  branchId = null,
+  deliveryDate = null,
+  deliveryStartTime = null,
+  deliveryEndTime = null,
+  deliveryStatus = "programado",
   total,
 }) {
   const result = await db.query(
@@ -29,12 +34,29 @@ async function createOrder({
         direccion_entrega,
         total,
         estado,
-        fecha_creacion
+        fecha_creacion,
+        sucursal_id,
+        fecha_entrega,
+        hora_entrega_inicio,
+        hora_entrega_fin,
+        fecha_confirmacion,
+        estatus_entrega
       )
-      VALUES ($1, $2, $3, $4, $5, 'pendiente', NOW())
+      VALUES ($1, $2, $3, $4, $5, 'pendiente', NOW(), $6, $7, $8, $9, NOW(), $10)
       RETURNING id, cliente_id, producto_id, conversacion_id, direccion_entrega, total, estado, fecha_creacion
     `,
-    [customerId, productId, conversationId, deliveryAddress, total]
+    [
+      customerId,
+      productId,
+      conversationId,
+      deliveryAddress,
+      total,
+      branchId,
+      deliveryDate,
+      deliveryStartTime,
+      deliveryEndTime,
+      deliveryStatus,
+    ]
   );
 
   return mapOrder(result.rows[0]);

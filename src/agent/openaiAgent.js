@@ -14,6 +14,10 @@ const {
   getActiveProductsByCategoryId,
 } = require("../repositories/productRepository");
 const {
+  findAvailableDeliveryWindows,
+  reserveDeliveryWindow,
+} = require("../repositories/deliveryWindowRepository");
+const {
   createOrder,
 } = require("../repositories/orderRepository");
 const { findClosestBranchCoverage } = require("../repositories/branchRepository");
@@ -41,7 +45,6 @@ async function detectIntentionWithOpenAI(message, intentions) {
 
   const completion = await client.chat.completions.create({
     model: openAiModel,
-    temperature: 0,
     response_format: { type: "json_object" },
     messages: [
       {
@@ -110,6 +113,27 @@ function formatMoney(amount) {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2,
   }).format(amount);
+}
+
+function formatLocalDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function formatDeliveryWindowLabel(window) {
+  const date = new Date(`${window.fecha}T12:00:00`);
+  const dateLabel = new Intl.DateTimeFormat("es-MX", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  }).format(date);
+
+  return `${dateLabel}, de ${String(window.horaInicio).slice(0, 5)} a ${String(
+    window.horaFin
+  ).slice(0, 5)}`;
 }
 
 function buildProductListReply(category, products) {
@@ -211,6 +235,17 @@ function getProductSelectionMessage(recentMessages) {
   }
 
   return null;
+}
+
+function getLatestBotMessageByPrefix(recentMessages, prefix) {
+  return [...(recentMessages || [])]
+    .reverse()
+    .find(
+      (item) =>
+        item.rol === "bot" &&
+        typeof item.mensaje === "string" &&
+        item.mensaje.startsWith(prefix)
+    );
 }
 
 async function getSelectedProductFromRecentMessages(
@@ -413,6 +448,98 @@ function extractFinalOrderAddressFromBotMessage(message) {
   return addressLine.slice(addressLinePrefix.length).trim();
 }
 
+function extractDeliveryWindowSelection(message) {
+  const match = String(message || "").match(/\b(\d+)\b/);
+
+  if (!match) {
+    return null;
+  }
+
+  const index = Number.parseInt(match[1], 10);
+  return Number.isInteger(index) && index > 0 ? index - 1 : null;
+}
+
+function getLatestFinalOrderAddressFromRecentMessages(recentMessages) {
+  const botMessage = getLatestBotMessageByPrefix(recentMessages, "Corrobora tu pedido:");
+
+  if (!botMessage) {
+    return null;
+  }
+
+  return extractFinalOrderAddressFromBotMessage(botMessage.mensaje);
+}
+
+function buildEarliestDeliveryDateTime({ product, coverage }) {
+  const now = new Date();
+  const prepMinutes =
+    Number(product?.tiempoPreparacionMin || 60) +
+    Number(coverage?.bufferLogisticoMin || 30);
+
+  const earliest = new Date(now.getTime() + prepMinutes * 60 * 1000);
+
+  if (product?.permiteEntregaMismoDia === false) {
+    earliest.setDate(earliest.getDate() + 1);
+    earliest.setHours(0, 0, 0, 0);
+  }
+
+  const datePart = formatLocalDate(earliest);
+  const timePart = `${String(earliest.getHours()).padStart(2, "0")}:${String(
+    earliest.getMinutes()
+  ).padStart(2, "0")}:00`;
+
+  return {
+    date: datePart,
+    time: timePart,
+  };
+}
+
+async function buildDeliveryOptionsFromContext({
+  recentMessages,
+  conversationCategoryId,
+  deliveryAddress,
+}) {
+  const selectedProduct = await getSelectedProductFromRecentMessages(
+    recentMessages,
+    conversationCategoryId
+  );
+
+  if (!selectedProduct) {
+    return null;
+  }
+
+  const geocodedAddress = await geocodeAddress(deliveryAddress);
+
+  if (!geocodedAddress.ok || !geocodedAddress.result?.location) {
+    return null;
+  }
+
+  const coverage = await findClosestBranchCoverage({
+    lat: geocodedAddress.result.location.lat,
+    lng: geocodedAddress.result.location.lng,
+  });
+
+  if (!coverage || !coverage.dentroDeCobertura) {
+    return null;
+  }
+
+  const earliest = buildEarliestDeliveryDateTime({
+    product: selectedProduct,
+    coverage,
+  });
+  const windows = await findAvailableDeliveryWindows({
+    sucursalId: coverage.id,
+    earliestDate: earliest.date,
+    earliestTime: earliest.time,
+    limit: 3,
+  });
+
+  return {
+    selectedProduct,
+    coverage,
+    windows,
+  };
+}
+
 async function buildAddressRetryReply() {
   const result = await handleDeliveryToolCall("solicitar_direccion_entrega", {
     nombreProducto: "tu pedido",
@@ -482,6 +609,16 @@ async function buildFinalOrderConfirmationReply({ product, deliveryAddress }) {
   return result.mensaje;
 }
 
+async function buildDeliveryOptionsReply(windows) {
+  const result = await handleDeliveryToolCall("mostrar_opciones_entrega", {
+    opciones: windows.map((window) => ({
+      etiqueta: formatDeliveryWindowLabel(window),
+    })),
+  });
+
+  return result.mensaje;
+}
+
 module.exports = {
   buildGreetingReply,
   runFloristAgent: async ({
@@ -508,35 +645,65 @@ module.exports = {
 
       const previousBotMessage = getPreviousBotMessage(recentMessages, message);
       const previousUserMessage = getPreviousUserMessage(recentMessages, message);
+      const latestFinalOrderAddress =
+        getLatestFinalOrderAddressFromRecentMessages(recentMessages);
       const pendingFinalOrderAddress = extractFinalOrderAddressFromBotMessage(
         previousBotMessage?.mensaje
       );
       const pendingConfirmedAddress = extractConfirmedAddressFromBotMessage(
         previousBotMessage?.mensaje
       );
+      const isChoosingDeliveryWindow =
+        previousBotMessage?.mensaje?.startsWith(
+          "Estas son las opciones de entrega disponibles:"
+        ) && !!latestFinalOrderAddress;
 
-      if (pendingFinalOrderAddress && isAffirmativeMessage(message)) {
-        if (!customerId || !conversationCategoryId) {
-          throw new Error(
-            "Faltan datos de cliente o categoria para crear el pedido confirmado."
-          );
+      if (isChoosingDeliveryWindow) {
+        const optionIndex = extractDeliveryWindowSelection(message);
+
+        if (optionIndex === null) {
+          return 'Responde con el numero de la opcion de entrega que prefieras.';
         }
 
-        const selectedProduct = await getSelectedProductFromRecentMessages(
+        const deliveryContext = await buildDeliveryOptionsFromContext({
           recentMessages,
-          conversationCategoryId
-        );
+          conversationCategoryId,
+          deliveryAddress: latestFinalOrderAddress,
+        });
 
-        if (!selectedProduct) {
-          return "No pude recuperar el producto seleccionado para generar tu pedido.";
+        if (!deliveryContext || deliveryContext.windows.length === 0) {
+          return "Por ahora no encontre horarios disponibles para esa direccion. Intenta con otra direccion o mas tarde.";
+        }
+
+        const selectedWindow = deliveryContext.windows[optionIndex];
+
+        if (!selectedWindow) {
+          return 'No reconoci esa opcion. Responde con el numero de una de las opciones de entrega disponibles.';
+        }
+
+        const reservedWindow = await reserveDeliveryWindow(selectedWindow.id);
+
+        if (!reservedWindow) {
+          return "Esa opcion ya se ocupó. Voy a mostrarte las opciones disponibles de nuevo.\n\n" +
+            (await buildDeliveryOptionsReply(deliveryContext.windows));
+        }
+
+        if (!customerId) {
+          throw new Error(
+            "Faltan datos del cliente para crear el pedido programado."
+          );
         }
 
         await createOrder({
           customerId,
-          productId: selectedProduct.id,
+          productId: deliveryContext.selectedProduct.id,
           conversationId,
-          deliveryAddress: pendingFinalOrderAddress,
-          total: selectedProduct.precio,
+          deliveryAddress: latestFinalOrderAddress,
+          branchId: deliveryContext.coverage.id,
+          deliveryDate: reservedWindow.fecha,
+          deliveryStartTime: reservedWindow.horaInicio,
+          deliveryEndTime: reservedWindow.horaFin,
+          total: deliveryContext.selectedProduct.precio,
         });
 
         await updateConversationState({
@@ -544,7 +711,21 @@ module.exports = {
           stateName: "inicio",
         });
 
-        return buildAddressConfirmedReply(pendingFinalOrderAddress);
+        return buildAddressConfirmedReply(latestFinalOrderAddress);
+      }
+
+      if (pendingFinalOrderAddress && isAffirmativeMessage(message)) {
+        const deliveryContext = await buildDeliveryOptionsFromContext({
+          recentMessages,
+          conversationCategoryId,
+          deliveryAddress: pendingFinalOrderAddress,
+        });
+
+        if (!deliveryContext || deliveryContext.windows.length === 0) {
+          return "Por ahora no encontre horarios disponibles para esa direccion. Comparteme otra direccion o intenta mas tarde.";
+        }
+
+        return buildDeliveryOptionsReply(deliveryContext.windows);
       }
 
       if (pendingFinalOrderAddress && isNegativeMessage(message)) {

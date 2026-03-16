@@ -135,6 +135,32 @@ const toolDefinitions = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "mostrar_opciones_entrega",
+      description:
+        "Muestra al cliente las opciones disponibles de fecha y horario de entrega.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          opciones: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                etiqueta: { type: "string" },
+              },
+              required: ["etiqueta"],
+            },
+          },
+        },
+        required: ["opciones"],
+      },
+    },
+  },
 ];
 
 function buildRequestDeliveryAddressMessage(nombreProducto) {
@@ -198,6 +224,18 @@ function buildOutOfCoverageMessage({
   );
 }
 
+function buildDeliveryOptionsMessage(opciones) {
+  const lines = opciones
+    .map((opcion, index) => `${index + 1}. ${opcion.etiqueta}`)
+    .join("\n");
+
+  return (
+    "Estas son las opciones de entrega disponibles:\n\n" +
+    `${lines}\n\n` +
+    'Responde con el numero de la opcion que prefieras.'
+  );
+}
+
 async function handleToolCall(toolName, args) {
   if (toolName === "solicitar_direccion_entrega") {
     return {
@@ -240,6 +278,13 @@ async function handleToolCall(toolName, args) {
         precioProducto: args.precioProducto,
         direccionEntrega: args.direccionEntrega,
       }),
+    };
+  }
+
+  if (toolName === "mostrar_opciones_entrega") {
+    return {
+      ok: true,
+      mensaje: buildDeliveryOptionsMessage(args.opciones || []),
     };
   }
 

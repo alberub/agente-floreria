@@ -39,7 +39,7 @@ function extractSelectionByNumber(message) {
 async function getActiveProductsByCategoryId(categoryId) {
   const result = await db.query(
     `
-      SELECT id, nombre, descripcion, precio, categoria_id
+      SELECT id, nombre, descripcion, precio, categoria_id, tiempo_preparacion_min, permite_entrega_mismo_dia
       FROM public.productos
       WHERE categoria_id = $1
         AND activo = TRUE
@@ -54,6 +54,11 @@ async function getActiveProductsByCategoryId(categoryId) {
     descripcion: row.descripcion ? String(row.descripcion).trim() : null,
     precio: Number(row.precio || 0),
     categoriaId: Number(row.categoria_id),
+    tiempoPreparacionMin: Number(row.tiempo_preparacion_min || 60),
+    permiteEntregaMismoDia:
+      row.permite_entrega_mismo_dia === null
+        ? true
+        : Boolean(row.permite_entrega_mismo_dia),
   }));
 }
 
