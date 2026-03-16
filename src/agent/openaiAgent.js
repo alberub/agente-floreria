@@ -39,6 +39,7 @@ const FINAL_ORDER_PREFIX = "Corrobora tu pedido:";
 const PRODUCT_LIST_MARKER = "Estas son las opciones disponibles:";
 const REQUEST_ADDRESS_FRAGMENT =
   "Ahora comparteme la direccion completa de entrega";
+const BUSINESS_TIME_ZONE = "America/Mexico_City";
 const MONTHS_ES = {
   enero: 0,
   febrero: 1,
@@ -147,26 +148,66 @@ function normalizeText(value) {
     .trim();
 }
 
-function formatLocalDate(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+function getBusinessDateParts(date = new Date()) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: BUSINESS_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  const parts = formatter.formatToParts(date);
+  const values = {};
 
-  return `${year}-${month}-${day}`;
+  for (const part of parts) {
+    if (part.type !== "literal") {
+      values[part.type] = part.value;
+    }
+  }
+
+  return values;
+}
+
+function createBusinessDate(year, month, day) {
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+}
+
+function formatLocalDate(date) {
+  const parts = getBusinessDateParts(date);
+
+  return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
 function startOfLocalDay(date) {
-  const value = new Date(date);
-  value.setHours(0, 0, 0, 0);
-  return value;
+  const parts = getBusinessDateParts(date);
+  return createBusinessDate(
+    Number(parts.year),
+    Number(parts.month),
+    Number(parts.day)
+  );
 }
 
 function formatHumanDate(date) {
   return new Intl.DateTimeFormat("es-MX", {
+    timeZone: BUSINESS_TIME_ZONE,
     weekday: "long",
     day: "numeric",
     month: "long",
   }).format(date);
+}
+
+function formatBusinessTime(date) {
+  const parts = getBusinessDateParts(date);
+  return `${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
+function addBusinessDays(date, days) {
+  const value = new Date(date);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value;
 }
 
 function parseRequestedDeliveryDate(message) {
@@ -178,14 +219,12 @@ function parseRequestedDeliveryDate(message) {
   }
 
   if (normalized.includes("pasado manana")) {
-    const date = new Date(today);
-    date.setDate(date.getDate() + 2);
+    const date = addBusinessDays(today, 2);
     return { date, label: formatHumanDate(date) };
   }
 
   if (normalized.includes("manana")) {
-    const date = new Date(today);
-    date.setDate(date.getDate() + 1);
+    const date = addBusinessDays(today, 1);
     return { date, label: formatHumanDate(date) };
   }
 
@@ -197,7 +236,11 @@ function parseRequestedDeliveryDate(message) {
 
   if (isoMatch) {
     const [, year, month, day] = isoMatch;
-    const date = new Date(Number(year), Number(month) - 1, Number(day));
+    const date = createBusinessDate(
+      Number(year),
+      Number(month),
+      Number(day)
+    );
     return Number.isNaN(date.getTime())
       ? null
       : { date: startOfLocalDay(date), label: formatHumanDate(date) };
@@ -207,9 +250,9 @@ function parseRequestedDeliveryDate(message) {
 
   if (slashMatch) {
     const [, day, month, year] = slashMatch;
-    const date = new Date(
-      Number(year || today.getFullYear()),
-      Number(month) - 1,
+    const date = createBusinessDate(
+      Number(year || today.getUTCFullYear()),
+      Number(month),
       Number(day)
     );
     return Number.isNaN(date.getTime())
@@ -228,7 +271,7 @@ function parseRequestedDeliveryDate(message) {
     const monthIndex = MONTHS_ES[monthName];
 
     if (monthIndex !== undefined) {
-      const date = new Date(Number(year), monthIndex, Number(day));
+      const date = createBusinessDate(Number(year), monthIndex + 1, Number(day));
       return Number.isNaN(date.getTime())
         ? null
         : { date: startOfLocalDay(date), label: formatHumanDate(date) };
@@ -723,27 +766,22 @@ function buildEarliestDeliveryDateTime({ product, coverage, requestedDate }) {
   const prepMinutes =
     Number(product?.tiempoPreparacionMin || 60) +
     Number(coverage?.bufferLogisticoMin || 30);
-  const targetDate = requestedDate ? startOfLocalDay(requestedDate) : startOfLocalDay(now);
   const earliest = new Date(now.getTime() + prepMinutes * 60 * 1000);
+  const todayKey = formatLocalDate(now);
+  const requestedDateKey = requestedDate ? formatLocalDate(requestedDate) : null;
+  let datePart = formatLocalDate(earliest);
+  let timePart = formatBusinessTime(earliest);
 
   if (product?.permiteEntregaMismoDia === false) {
-    earliest.setDate(earliest.getDate() + 1);
-    earliest.setHours(0, 0, 0, 0);
+    const nextBusinessDay = addBusinessDays(startOfLocalDay(now), 1);
+    datePart = formatLocalDate(nextBusinessDay);
+    timePart = "00:00:00";
   }
 
-  if (targetDate > startOfLocalDay(now)) {
-    earliest.setFullYear(
-      targetDate.getFullYear(),
-      targetDate.getMonth(),
-      targetDate.getDate()
-    );
-    earliest.setHours(0, 0, 0, 0);
+  if (requestedDateKey && requestedDateKey > todayKey) {
+    datePart = requestedDateKey;
+    timePart = "00:00:00";
   }
-
-  const datePart = formatLocalDate(earliest);
-  const timePart = `${String(earliest.getHours()).padStart(2, "0")}:${String(
-    earliest.getMinutes()
-  ).padStart(2, "0")}:00`;
 
   return {
     date: datePart,
