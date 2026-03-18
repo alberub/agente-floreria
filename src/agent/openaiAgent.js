@@ -1031,6 +1031,27 @@ async function buildDeliveryOptionsReply(windows) {
   return result.mensaje;
 }
 
+async function tryFindConversationStateIdByName(name) {
+  try {
+    return await findConversationStateIdByName(name);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function isGratitudeMessage(message) {
+  return /^(gracias|muchas gracias|te lo agradezco|mil gracias|perfecto gracias)$/i.test(
+    String(message || "").trim()
+  );
+}
+
+function buildPostPurchaseReply() {
+  return (
+    "Con gusto. Tu pedido ya quedo confirmado y en breve te compartiremos el seguimiento. " +
+    "Si despues deseas hacer otro pedido, tambien puedo ayudarte."
+  );
+}
+
 module.exports = {
   buildGreetingReply,
   runFloristAgent: async ({
@@ -1049,6 +1070,8 @@ module.exports = {
     const waitingAddressStateId =
       await findConversationStateIdByName("esperando_direccion");
     const initialStateId = await findConversationStateIdByName("inicio");
+    const postPurchaseStateId =
+      await tryFindConversationStateIdByName("pedido_confirmado");
 
     if (Number(conversationStateId) === Number(waitingAddressStateId)) {
       if (!conversationId) {
@@ -1143,7 +1166,7 @@ module.exports = {
 
         await updateConversationState({
           conversationId,
-          stateName: "inicio",
+          stateName: postPurchaseStateId ? "pedido_confirmado" : "inicio",
         });
 
         return buildAddressConfirmedReply();
@@ -1288,6 +1311,65 @@ module.exports = {
       }
 
       return buildAddressConfirmationRequestReply(geocodedAddress.result);
+    }
+
+    if (
+      postPurchaseStateId &&
+      Number(conversationStateId) === Number(postPurchaseStateId)
+    ) {
+      const activeIntentions = await getActiveIntentions();
+      const matchedCategoryFromFreeText = await detectCategoryInMessage(message);
+      const detectedIntentionName = await detectIntentionWithOpenAI(
+        message,
+        activeIntentions
+      );
+
+      if (isGratitudeMessage(message) || isGreetingMessage(message)) {
+        return buildPostPurchaseReply();
+      }
+
+      if (conversationId && matchedCategoryFromFreeText) {
+        const matchedIntention = activeIntentions.find(
+          (item) => item.nombre === "comprar_flores"
+        );
+
+        if (matchedIntention) {
+          await updateConversationIntent({
+            conversationId,
+            intentionId: matchedIntention.id,
+            stateName: "esperando_categoria",
+          });
+        }
+
+        await updateConversationCategory({
+          conversationId,
+          categoryId: matchedCategoryFromFreeText.id,
+          stateName: "esperando_producto",
+        });
+
+        return buildCoverageZoneRequestReply();
+      }
+
+      if (
+        conversationId &&
+        detectedIntentionName === "comprar_flores"
+      ) {
+        const matchedIntention = activeIntentions.find(
+          (item) => item.nombre === detectedIntentionName
+        );
+
+        if (matchedIntention) {
+          await updateConversationIntent({
+            conversationId,
+            intentionId: matchedIntention.id,
+            stateName: "esperando_categoria",
+          });
+        }
+
+        return buildGreetingReply(message, nombreCliente);
+      }
+
+      return buildPostPurchaseReply();
     }
 
     if (Number(conversationStateId) === Number(waitingProductStateId)) {
