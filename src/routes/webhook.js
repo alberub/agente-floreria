@@ -1,13 +1,20 @@
 const express = require("express");
 const { metaVerifyToken } = require("../config/env");
 const { runFloristAgent } = require("../agent/openaiAgent");
-const { sendWhatsAppTextMessage } = require("../services/metaService");
+const {
+  sendWhatsAppTextMessage,
+  sendWhatsAppImageMessage,
+} = require("../services/metaService");
 const {
   findOrCreateCustomerByPhone,
 } = require("../repositories/customerRepository");
 const {
+  findActiveConversationByCustomerId,
   findOrCreateActiveConversation,
 } = require("../repositories/conversationRepository");
+const {
+  getActiveProductsByCategoryId,
+} = require("../repositories/productRepository");
 const {
   getRecentMessagesByConversation,
   saveMessage,
@@ -45,6 +52,26 @@ function getTextMessages(changes) {
   }
 
   return messages;
+}
+
+function isCatalogReply(reply) {
+  return (
+    typeof reply === "string" &&
+    reply.includes("Estas son las opciones disponibles:")
+  );
+}
+
+function formatMoney(amount) {
+  return new Intl.NumberFormat("es-MX", {
+    style: "currency",
+    currency: "MXN",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(amount);
+}
+
+function buildProductImageCaption(product, index) {
+  return `${index + 1}. ${product.nombre}\n${formatMoney(product.precio)}`;
 }
 
 router.get("/webhook", (req, res) => {
@@ -96,6 +123,27 @@ router.post("/webhook", async (req, res) => {
         rol: "bot",
         mensaje: reply,
       });
+
+      const updatedConversation = await findActiveConversationByCustomerId(
+        customer.id
+      );
+
+      if (isCatalogReply(reply) && updatedConversation?.categoriaId) {
+        const products = await getActiveProductsByCategoryId(
+          updatedConversation.categoriaId
+        );
+        const productsWithImage = products
+          .filter((product) => product.imagenPrincipalUrl)
+          .slice(0, 5);
+
+        for (const [index, product] of productsWithImage.entries()) {
+          await sendWhatsAppImageMessage(
+            incomingMessage.from,
+            product.imagenPrincipalUrl,
+            buildProductImageCaption(product, index)
+          );
+        }
+      }
 
       await sendWhatsAppTextMessage(incomingMessage.from, reply);
     } catch (error) {
