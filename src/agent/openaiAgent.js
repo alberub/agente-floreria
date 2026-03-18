@@ -1085,6 +1085,17 @@ function buildPostPurchaseReply() {
   );
 }
 
+function hasRecentPurchaseConfirmation(recentMessages) {
+  return [...(recentMessages || [])]
+    .reverse()
+    .some(
+      (item) =>
+        item.rol === "bot" &&
+        typeof item.mensaje === "string" &&
+        item.mensaje.startsWith("Gracias por tu compra. Tu pedido ha sido registrado")
+    );
+}
+
 module.exports = {
   buildGreetingReply,
   runFloristAgent: async ({
@@ -1105,6 +1116,8 @@ module.exports = {
     const initialStateId = await findConversationStateIdByName("inicio");
     const postPurchaseStateId =
       await tryFindConversationStateIdByName("pedido_confirmado");
+    const hasRecentConfirmedPurchase =
+      hasRecentPurchaseConfirmation(recentMessages);
 
     if (Number(conversationStateId) === Number(waitingAddressStateId)) {
       if (!conversationId) {
@@ -1424,6 +1437,14 @@ module.exports = {
         return buildGreetingReply(message, nombreCliente);
       }
 
+      return buildPostPurchaseReply();
+    }
+
+    if (
+      !postPurchaseStateId &&
+      hasRecentConfirmedPurchase &&
+      (isGratitudeMessage(message) || isGreetingMessage(message))
+    ) {
       return buildPostPurchaseReply();
     }
 
