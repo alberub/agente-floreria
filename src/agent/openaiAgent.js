@@ -40,8 +40,6 @@ const REQUEST_EXACT_ADDRESS_PREFIX = "Perfecto, apartaremos el horario ";
 const FINAL_ORDER_PREFIX = "Corrobora tu pedido:";
 const PRODUCT_LIST_MARKER = "Estas son las opciones disponibles:";
 const DATE_RETRY_PREFIX = "No pude identificar la fecha deseada.";
-const REQUEST_ADDRESS_FRAGMENT =
-  "Ahora comparteme la direccion completa de entrega";
 const BUSINESS_TIME_ZONE = "America/Mexico_City";
 const MONTHS_ES = {
   enero: 0,
@@ -58,16 +56,6 @@ const MONTHS_ES = {
   noviembre: 10,
   diciembre: 11,
 };
-const WEEKDAYS_ES = [
-  "domingo",
-  "lunes",
-  "martes",
-  "miercoles",
-  "jueves",
-  "viernes",
-  "sabado",
-];
-
 const GREETING_PATTERNS = [
   /^(hola|buenas|buenos dias|buenas tardes|buenas noches|hey|que tal)[!. ]*$/i,
 ];
@@ -133,10 +121,6 @@ async function buildGreetingReply(message, nombreCliente) {
 
 async function detectCategoryInMessage(message) {
   return findActiveCategoryByName(message);
-}
-
-function buildCategoryConfirmedReply(category) {
-  return `Perfecto, trabajaremos con la categoria ${category.tipoCategoria}. Ahora te mostrare las opciones disponibles.`;
 }
 
 async function buildCategoryRetryReply(nombreCliente) {
@@ -420,12 +404,6 @@ function buildProductListForRequestedDateReply(category, products, requestedDate
     .join("\n")}`;
 }
 
-async function buildProductSelectedReply(product) {
-  const result = await handleDeliveryToolCall("solicitar_zona_entrega", {});
-
-  return result.mensaje;
-}
-
 async function buildCoverageZoneRequestReply() {
   const result = await handleDeliveryToolCall("solicitar_zona_entrega", {});
 
@@ -600,7 +578,7 @@ function buildProductSelectionHelpReply(category, products) {
     )}. Si lo deseas, responde "la quiero" para continuar con la direccion de entrega.`;
   }
 
-  return `Si deseas continuar, responde con el numero o el nombre de una opcion de ${category.tipoCategoria}.`;
+  return `Responde solo con el numero o el nombre de una opcion de ${category.tipoCategoria}.`;
 }
 
 function looksLikeDeliveryAddress(message) {
@@ -681,11 +659,6 @@ function buildAddressSearchQuery({ message, previousUserMessage }) {
   return null;
 }
 
-function isAffirmativeMessage(message) {
-  return /^(si|sí|correcto|es correcto|confirmo|ok|okay)$/i.test(
-    String(message || "").trim()
-  );
-}
 
 function isNegativeMessage(message) {
   return /^(no|incorrecto|no es correcto|cambiar|corrijo)$/i.test(
@@ -1081,7 +1054,7 @@ function isGratitudeMessage(message) {
 function buildPostPurchaseReply() {
   return (
     "Con gusto. Tu pedido ya quedo confirmado y en breve te compartiremos el seguimiento. " +
-    "Si despues deseas hacer otro pedido, tambien puedo ayudarte."
+    'Si deseas hacer otro pedido, escribe "nuevo pedido".'
   );
 }
 
@@ -1094,6 +1067,23 @@ function hasRecentPurchaseConfirmation(recentMessages) {
         typeof item.mensaje === "string" &&
         item.mensaje.startsWith("Gracias por tu compra. Tu pedido ha sido registrado")
     );
+}
+
+function isLikelyNewPurchaseMessage(message) {
+  const normalized = normalizeText(message);
+
+  return (
+    normalized.includes("nuevo pedido") ||
+    normalized.includes("otro pedido") ||
+    normalized.includes("quiero otro") ||
+    normalized.includes("quiero comprar") ||
+    normalized.includes("comprar flores") ||
+    normalized.includes("busco flores") ||
+    normalized.includes("necesito flores") ||
+    normalized.includes("aniversario") ||
+    normalized.includes("cumpleanos") ||
+    normalized.includes("solo porque si")
+  );
 }
 
 module.exports = {
@@ -1272,63 +1262,6 @@ module.exports = {
         return "De acuerdo. Responde con el numero del horario que prefieras.";
       }
 
-      /*
-        const optionIndex = extractDeliveryWindowSelection(message);
-
-        if (optionIndex === null) {
-          return 'Responde con el numero de la opcion de entrega que prefieras.';
-        }
-
-        const deliveryContext = await buildDeliveryOptionsFromRecentSelections({
-          recentMessages,
-          conversationCategoryId,
-        });
-
-        if (!deliveryContext || deliveryContext.windows.length === 0) {
-          return "Por ahora no encontre horarios disponibles para la fecha solicitada. Intenta con otra fecha o mas tarde.";
-        }
-
-        const selectedWindow = deliveryContext.windows[optionIndex];
-
-        if (!selectedWindow) {
-          return 'No reconoci esa opcion. Responde con el numero de una de las opciones de entrega disponibles.';
-        }
-
-        const reservedWindow = await reserveDeliveryWindow(selectedWindow.id);
-
-        if (!reservedWindow) {
-          return "Esa opcion ya se ocupó. Voy a mostrarte las opciones disponibles de nuevo.\n\n" +
-            (await buildDeliveryOptionsReply(deliveryContext.windows));
-        }
-
-        if (!customerId) {
-          throw new Error(
-            "Faltan datos del cliente para crear el pedido programado."
-          );
-        }
-
-        await createOrder({
-          customerId,
-          productId: deliveryContext.selectedProduct.id,
-          conversationId,
-          deliveryAddress: latestFinalOrderAddress,
-          branchId: deliveryContext.coverage.id,
-          deliveryDate: reservedWindow.fecha,
-          deliveryStartTime: reservedWindow.horaInicio,
-          deliveryEndTime: reservedWindow.horaFin,
-          total: deliveryContext.selectedProduct.precio,
-        });
-
-        await updateConversationState({
-          conversationId,
-          stateName: "inicio",
-        });
-
-        return buildAddressConfirmedReply(latestFinalOrderAddress);
-      }
-
-      */
-
       if (pendingConfirmedAddress && isNegativeMessage(message)) {
         return buildAddressRetryReply();
       }
@@ -1392,7 +1325,11 @@ module.exports = {
         activeIntentions
       );
 
-      if (isGratitudeMessage(message) || isGreetingMessage(message)) {
+      if (
+        isGratitudeMessage(message) ||
+        isGreetingMessage(message) ||
+        !isLikelyNewPurchaseMessage(message)
+      ) {
         return buildPostPurchaseReply();
       }
 
@@ -1440,11 +1377,7 @@ module.exports = {
       return buildPostPurchaseReply();
     }
 
-    if (
-      !postPurchaseStateId &&
-      hasRecentConfirmedPurchase &&
-      (isGratitudeMessage(message) || isGreetingMessage(message))
-    ) {
+    if (hasRecentConfirmedPurchase && !isLikelyNewPurchaseMessage(message)) {
       return buildPostPurchaseReply();
     }
 
@@ -1500,7 +1433,7 @@ module.exports = {
         const requestedDate = parseRequestedDeliveryDate(message);
 
         if (!requestedDate) {
-          return "No pude identificar la fecha deseada. Responde, por ejemplo, hoy, manana o una fecha como 20/03/2026.";
+          return "No pude identificar la fecha deseada. Responde solo con hoy, manana o una fecha como 20/03/2026.";
         }
 
         return buildProductListForRequestedDateReply(
@@ -1570,19 +1503,6 @@ module.exports = {
             )
           : buildCoverageZoneRequestReply();
       }
-
-      if (!customerId || !conversationId) {
-        throw new Error(
-          "Faltan datos de cliente o conversacion para continuar con la compra."
-        );
-      }
-
-      await updateConversationState({
-        conversationId,
-        stateName: "esperando_direccion",
-      });
-
-      return buildProductSelectedReply(selectedProduct);
     }
 
     if (
@@ -1669,3 +1589,4 @@ module.exports = {
     return buildGreetingReply(message, nombreCliente);
   },
 };
+

@@ -228,14 +228,14 @@ function buildRequestDeliveryAddressMessage(nombreProducto) {
 function buildRequestCoverageZoneMessage() {
   return (
     "Para comenzar, comparteme la colonia y municipio de entrega o el codigo postal. " +
-    "Con eso valido primero si tenemos cobertura en tu zona."
+    "Responde solo con ese dato para validar primero si tenemos cobertura en tu zona."
   );
 }
 
 function buildRequestDeliveryDateMessage() {
   return (
     "Perfecto, si tenemos cobertura en esa zona. " +
-    "Ahora indicame para que dia deseas la entrega. Puedes responder, por ejemplo, hoy, manana o una fecha especifica."
+    "Ahora indicame para que dia deseas la entrega. Responde solo con hoy, manana o una fecha especifica."
   );
 }
 
