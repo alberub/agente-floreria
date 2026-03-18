@@ -34,6 +34,8 @@ const REQUEST_ZONE_PREFIX =
   "Para comenzar, comparteme la colonia y municipio de entrega o el codigo postal.";
 const REQUEST_DATE_PREFIX = "Perfecto, si tenemos cobertura en esa zona.";
 const DELIVERY_OPTIONS_PREFIX = "Estas son las opciones de entrega disponibles:";
+const DELIVERY_OPTIONS_REMINDER_PREFIX =
+  "Responde con el numero de la opcion de entrega que prefieras.";
 const REQUEST_EXACT_ADDRESS_PREFIX = "Perfecto, apartaremos el horario ";
 const FINAL_ORDER_PREFIX = "Corrobora tu pedido:";
 const PRODUCT_LIST_MARKER = "Estas son las opciones disponibles:";
@@ -798,13 +800,17 @@ function extractSelectedWindowFromBotMessage(message) {
 }
 
 function extractDeliveryWindowSelection(message) {
-  const match = String(message || "").match(/\b(\d+)\b/);
+  const normalized = String(message || "").toLowerCase().trim();
+  const optionMatch = normalized.match(
+    /\b(?:opcion|opción)\s*#?\s*(\d+)\b|\b(\d+)\b/
+  );
 
-  if (!match) {
+  if (!optionMatch) {
     return null;
   }
 
-  const index = Number.parseInt(match[1], 10);
+  const rawIndex = optionMatch[1] || optionMatch[2];
+  const index = Number.parseInt(rawIndex, 10);
   return Number.isInteger(index) && index > 0 ? index - 1 : null;
 }
 
@@ -839,6 +845,33 @@ function getLatestSelectedWindowFromRecentMessages(recentMessages) {
   }
 
   return extractSelectedWindowFromBotMessage(botMessage.mensaje);
+}
+
+function getLatestDeliveryWindowSelectionIndexFromRecentMessages(recentMessages) {
+  const messages = [...(recentMessages || [])];
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const item = messages[index];
+
+    if (item.rol !== "bot" || typeof item.mensaje !== "string") {
+      continue;
+    }
+
+    if (
+      item.mensaje.startsWith(DELIVERY_OPTIONS_PREFIX) ||
+      item.mensaje.startsWith(DELIVERY_OPTIONS_REMINDER_PREFIX)
+    ) {
+      for (let lookup = index + 1; lookup < messages.length; lookup += 1) {
+        if (messages[lookup].rol === "user") {
+          return extractDeliveryWindowSelection(messages[lookup].mensaje);
+        }
+      }
+
+      return null;
+    }
+  }
+
+  return null;
 }
 
 function getLatestRequestedDateFromRecentMessages(recentMessages) {
@@ -1093,7 +1126,10 @@ module.exports = {
         previousBotMessage?.mensaje
       );
 
-      if (previousBotMessage?.mensaje?.startsWith(DELIVERY_OPTIONS_PREFIX)) {
+      if (
+        previousBotMessage?.mensaje?.startsWith(DELIVERY_OPTIONS_PREFIX) ||
+        previousBotMessage?.mensaje?.startsWith(DELIVERY_OPTIONS_REMINDER_PREFIX)
+      ) {
         const optionIndex = extractDeliveryWindowSelection(message);
 
         if (optionIndex === null) {
@@ -1186,8 +1222,27 @@ module.exports = {
           return "No pude recuperar el producto seleccionado para corroborar el pedido.";
         }
 
-        const selectedWindowLabel =
+        let selectedWindowLabel =
           getLatestSelectedWindowFromRecentMessages(recentMessages);
+
+        if (!selectedWindowLabel) {
+          const deliveryContext = await buildDeliveryOptionsFromRecentSelections({
+            recentMessages,
+            conversationCategoryId,
+          });
+          const selectedWindowIndex =
+            getLatestDeliveryWindowSelectionIndexFromRecentMessages(recentMessages);
+
+          if (
+            deliveryContext &&
+            Number.isInteger(selectedWindowIndex) &&
+            deliveryContext.windows[selectedWindowIndex]
+          ) {
+            selectedWindowLabel = formatDeliveryWindowLabel(
+              deliveryContext.windows[selectedWindowIndex]
+            );
+          }
+        }
 
         if (!selectedWindowLabel) {
           return "No pude recuperar el horario seleccionado. Voy a mostrarte las opciones disponibles de nuevo.";
@@ -1204,7 +1259,7 @@ module.exports = {
         return "De acuerdo. Responde con el numero del horario que prefieras.";
       }
 
-      /* Legacy flow removed
+      /*
         const optionIndex = extractDeliveryWindowSelection(message);
 
         if (optionIndex === null) {
