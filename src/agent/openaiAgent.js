@@ -37,6 +37,7 @@ const DELIVERY_OPTIONS_PREFIX = "Estas son las opciones de entrega disponibles:"
 const REQUEST_EXACT_ADDRESS_PREFIX = "Perfecto, apartaremos el horario ";
 const FINAL_ORDER_PREFIX = "Corrobora tu pedido:";
 const PRODUCT_LIST_MARKER = "Estas son las opciones disponibles:";
+const DATE_RETRY_PREFIX = "No pude identificar la fecha deseada.";
 const REQUEST_ADDRESS_FRAGMENT =
   "Ahora comparteme la direccion completa de entrega";
 const BUSINESS_TIME_ZONE = "America/Mexico_City";
@@ -55,6 +56,15 @@ const MONTHS_ES = {
   noviembre: 10,
   diciembre: 11,
 };
+const WEEKDAYS_ES = [
+  "domingo",
+  "lunes",
+  "martes",
+  "miercoles",
+  "jueves",
+  "viernes",
+  "sabado",
+];
 
 const GREETING_PATTERNS = [
   /^(hola|buenas|buenos dias|buenas tardes|buenas noches|hey|que tal)[!. ]*$/i,
@@ -210,9 +220,26 @@ function addBusinessDays(date, days) {
   return value;
 }
 
+function getBusinessTodayYearMonth() {
+  const parts = getBusinessDateParts(new Date());
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+  };
+}
+
 function parseRequestedDeliveryDate(message) {
-  const normalized = normalizeText(message);
+  const normalized = normalizeText(message)
+    .replace(/\bpara\s+el\b/g, "")
+    .replace(/\bpara\b/g, "")
+    .replace(/\bel\s+dia\b/g, "")
+    .replace(/\bel\b/g, "")
+    .replace(/\bde\s+este\s+mes\b/g, "")
+    .replace(/\beste\s+mes\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
   const today = startOfLocalDay(new Date());
+  const businessToday = getBusinessTodayYearMonth();
 
   if (!normalized) {
     return null;
@@ -276,6 +303,44 @@ function parseRequestedDeliveryDate(message) {
         ? null
         : { date: startOfLocalDay(date), label: formatHumanDate(date) };
     }
+  }
+
+  const weekdayDayMatch = normalized.match(
+    /\b(?:domingo|lunes|martes|miercoles|jueves|viernes|sabado)\s+(\d{1,2})(?:\s+de\s+([a-z]+)|\s+([a-z]+)|)\b/
+  );
+
+  if (weekdayDayMatch) {
+    const day = Number(weekdayDayMatch[1]);
+    const monthName = weekdayDayMatch[2] || weekdayDayMatch[3] || null;
+
+    if (monthName && MONTHS_ES[monthName] !== undefined) {
+      const date = createBusinessDate(
+        businessToday.year,
+        MONTHS_ES[monthName] + 1,
+        day
+      );
+      return Number.isNaN(date.getTime())
+        ? null
+        : { date: startOfLocalDay(date), label: formatHumanDate(date) };
+    }
+
+    const date = createBusinessDate(businessToday.year, businessToday.month, day);
+    return Number.isNaN(date.getTime())
+      ? null
+      : { date: startOfLocalDay(date), label: formatHumanDate(date) };
+  }
+
+  const dayOnlyMatch = normalized.match(/\b(\d{1,2})\b/);
+
+  if (dayOnlyMatch) {
+    const date = createBusinessDate(
+      businessToday.year,
+      businessToday.month,
+      Number(dayOnlyMatch[1])
+    );
+    return Number.isNaN(date.getTime())
+      ? null
+      : { date: startOfLocalDay(date), label: formatHumanDate(date) };
   }
 
   return null;
@@ -345,7 +410,7 @@ function buildProductListForRequestedDateReply(category, products, requestedDate
     return baseReply;
   }
 
-  return `Perfecto, para ${requestedDate.label} trabajaremos con la categoria ${category.tipoCategoria}. Estas son las opciones disponibles:\n\n${products
+  return `Perfecto, entonces la entrega seria para ${requestedDate.label}. Trabajaremos con la categoria ${category.tipoCategoria}. Estas son las opciones disponibles:\n\n${products
     .map((product, index) => {
       const description = product.descripcion ? ` - ${product.descripcion}` : "";
       return `${index + 1}. ${product.nombre} - ${formatMoney(product.precio)}${description}`;
@@ -1270,7 +1335,10 @@ module.exports = {
         return buildDeliveryDateRequestReply();
       }
 
-      if (previousBotMessage?.mensaje?.startsWith(REQUEST_DATE_PREFIX)) {
+      if (
+        previousBotMessage?.mensaje?.startsWith(REQUEST_DATE_PREFIX) ||
+        previousBotMessage?.mensaje?.startsWith(DATE_RETRY_PREFIX)
+      ) {
         const requestedDate = parseRequestedDeliveryDate(message);
 
         if (!requestedDate) {
