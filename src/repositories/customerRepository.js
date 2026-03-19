@@ -25,6 +25,28 @@ async function findCustomerByPhone(phone) {
   };
 }
 
+async function findCustomerById(customerId) {
+  const result = await db.query(
+    `
+      SELECT id, telefono, nombre
+      FROM public.clientes_floreria
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [customerId]
+  );
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
+  return {
+    id: Number(result.rows[0].id),
+    telefono: result.rows[0].telefono,
+    nombre: result.rows[0].nombre,
+  };
+}
+
 async function createCustomer({ phone, nombre = null }) {
   const normalizedPhone = normalizePhone(phone);
 
@@ -66,6 +88,7 @@ async function findOrCreateCustomerByPhone(phone) {
 }
 
 module.exports = {
+  findCustomerById,
   findCustomerByPhone,
   createCustomer,
   findOrCreateCustomerByPhone,

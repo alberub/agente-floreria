@@ -6,6 +6,8 @@ const {
 const {
   findActiveConversationByCustomerId,
   findOrCreateActiveConversation,
+  takeConversationByHuman,
+  isBotResponseEnabled,
 } = require("../repositories/conversationRepository");
 const {
   getRecentMessagesByConversation,
@@ -13,6 +15,28 @@ const {
 } = require("../repositories/messageRepository");
 
 const router = express.Router();
+const HUMAN_HANDOFF_PATTERNS = [
+  /asesor/i,
+  /humano/i,
+  /persona/i,
+  /agente/i,
+  /representante/i,
+];
+
+function isHumanHandoffRequest(message) {
+  const normalized = String(message || "").trim();
+
+  return (
+    normalized.length > 0 &&
+    HUMAN_HANDOFF_PATTERNS.some((pattern) => pattern.test(normalized))
+  );
+}
+
+function buildHumanHandoffReply() {
+  return (
+    "Claro, voy a pausar al asistente y canalizar tu chat con un asesor humano."
+  );
+}
 
 router.post("/agent/respond", async (req, res) => {
   try {
@@ -36,6 +60,41 @@ router.post("/agent/respond", async (req, res) => {
         rol: "user",
         mensaje: message,
       });
+
+      if (isHumanHandoffRequest(message)) {
+        conversation = await takeConversationByHuman({
+          conversationId: conversation.id,
+          humanAgentId: null,
+        });
+
+        const handoffReply = buildHumanHandoffReply();
+        await saveMessage({
+          conversacionId: conversation.id,
+          rol: "bot",
+          mensaje: handoffReply,
+        });
+
+        return res.status(200).json({
+          ok: true,
+          customer,
+          conversation,
+          reply: handoffReply,
+        });
+      }
+
+      const freshConversation = await findActiveConversationByCustomerId(
+        customer.id
+      );
+
+      if (!isBotResponseEnabled(freshConversation)) {
+        return res.status(200).json({
+          ok: true,
+          customer,
+          conversation: freshConversation,
+          reply: null,
+          skipped: "human_control",
+        });
+      }
     }
 
     const recentMessages = conversation
@@ -63,6 +122,16 @@ router.post("/agent/respond", async (req, res) => {
 
     if (customer) {
       conversation = await findActiveConversationByCustomerId(customer.id);
+
+      if (!isBotResponseEnabled(conversation)) {
+        return res.status(200).json({
+          ok: true,
+          customer,
+          conversation,
+          reply: null,
+          skipped: "human_control",
+        });
+      }
     }
 
     return res.status(200).json({

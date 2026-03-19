@@ -1,9 +1,45 @@
 const db = require("../db");
 
+function mapConversationRow(row) {
+  return {
+    id: Number(row.id),
+    clienteId: Number(row.cliente_id),
+    estadoId: row.estado_id
+      ? Number(row.estado_id)
+      : null,
+    intencionId: row.intencion_id
+      ? Number(row.intencion_id)
+      : null,
+    categoriaId: row.categoria_id
+      ? Number(row.categoria_id)
+      : null,
+    activa: Boolean(row.activa),
+    controlOwner: row.control_owner || "bot",
+    humanTakenAt: row.human_taken_at || null,
+    humanAgentId: row.human_agent_id || null,
+    botPaused: Boolean(row.bot_paused),
+  };
+}
+
+function getConversationSelectFields() {
+  return [
+    "id",
+    "cliente_id",
+    "estado_id",
+    "intencion_id",
+    "categoria_id",
+    "activa",
+    "control_owner",
+    "human_taken_at",
+    "human_agent_id",
+    "bot_paused",
+  ].join(", ");
+}
+
 async function findActiveConversationByCustomerId(customerId) {
   const result = await db.query(
     `
-      SELECT id, cliente_id, estado_id, intencion_id, categoria_id, activa
+      SELECT ${getConversationSelectFields()}
       FROM public.conversaciones
       WHERE cliente_id = $1
         AND activa = TRUE
@@ -17,20 +53,25 @@ async function findActiveConversationByCustomerId(customerId) {
     return null;
   }
 
-  return {
-    id: Number(result.rows[0].id),
-    clienteId: Number(result.rows[0].cliente_id),
-    estadoId: result.rows[0].estado_id
-      ? Number(result.rows[0].estado_id)
-      : null,
-    intencionId: result.rows[0].intencion_id
-      ? Number(result.rows[0].intencion_id)
-      : null,
-    categoriaId: result.rows[0].categoria_id
-      ? Number(result.rows[0].categoria_id)
-      : null,
-    activa: Boolean(result.rows[0].activa),
-  };
+  return mapConversationRow(result.rows[0]);
+}
+
+async function findConversationById(conversationId) {
+  const result = await db.query(
+    `
+      SELECT ${getConversationSelectFields()}
+      FROM public.conversaciones
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [conversationId]
+  );
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
+  return mapConversationRow(result.rows[0]);
 }
 
 async function findConversationStateIdByName(name) {
@@ -64,24 +105,13 @@ async function createConversationForCustomer(customerId) {
         activa
       )
       VALUES ($1, $2, $3, NOW(), TRUE)
-      RETURNING id, cliente_id, estado_id, intencion_id, categoria_id, activa
+      RETURNING ${getConversationSelectFields()}
     `,
     [customerId, "inicio", initialStateId]
   );
 
   return {
-    id: Number(result.rows[0].id),
-    clienteId: Number(result.rows[0].cliente_id),
-    estadoId: result.rows[0].estado_id
-      ? Number(result.rows[0].estado_id)
-      : null,
-    intencionId: result.rows[0].intencion_id
-      ? Number(result.rows[0].intencion_id)
-      : null,
-    categoriaId: result.rows[0].categoria_id
-      ? Number(result.rows[0].categoria_id)
-      : null,
-    activa: Boolean(result.rows[0].activa),
+    ...mapConversationRow(result.rows[0]),
     wasCreated: true,
   };
 }
@@ -114,7 +144,7 @@ async function updateConversationIntent({
           estado_id = $4,
           ultima_interaccion = NOW()
       WHERE id = $1
-      RETURNING id, cliente_id, estado_id, intencion_id, categoria_id, activa
+      RETURNING ${getConversationSelectFields()}
     `,
     [conversationId, intentionId, stateName, stateId]
   );
@@ -123,20 +153,7 @@ async function updateConversationIntent({
     throw new Error(`No existe la conversacion: ${conversationId}`);
   }
 
-  return {
-    id: Number(result.rows[0].id),
-    clienteId: Number(result.rows[0].cliente_id),
-    estadoId: result.rows[0].estado_id
-      ? Number(result.rows[0].estado_id)
-      : null,
-    intencionId: result.rows[0].intencion_id
-      ? Number(result.rows[0].intencion_id)
-      : null,
-    categoriaId: result.rows[0].categoria_id
-      ? Number(result.rows[0].categoria_id)
-      : null,
-    activa: Boolean(result.rows[0].activa),
-  };
+  return mapConversationRow(result.rows[0]);
 }
 
 async function updateConversationCategory({
@@ -154,7 +171,7 @@ async function updateConversationCategory({
           estado_id = $4,
           ultima_interaccion = NOW()
       WHERE id = $1
-      RETURNING id, cliente_id, estado_id, intencion_id, categoria_id, activa
+      RETURNING ${getConversationSelectFields()}
     `,
     [conversationId, categoryId, stateName, stateId]
   );
@@ -163,20 +180,7 @@ async function updateConversationCategory({
     throw new Error(`No existe la conversacion: ${conversationId}`);
   }
 
-  return {
-    id: Number(result.rows[0].id),
-    clienteId: Number(result.rows[0].cliente_id),
-    estadoId: result.rows[0].estado_id
-      ? Number(result.rows[0].estado_id)
-      : null,
-    intencionId: result.rows[0].intencion_id
-      ? Number(result.rows[0].intencion_id)
-      : null,
-    categoriaId: result.rows[0].categoria_id
-      ? Number(result.rows[0].categoria_id)
-      : null,
-    activa: Boolean(result.rows[0].activa),
-  };
+  return mapConversationRow(result.rows[0]);
 }
 
 async function updateConversationState({
@@ -192,7 +196,7 @@ async function updateConversationState({
           estado_id = $3,
           ultima_interaccion = NOW()
       WHERE id = $1
-      RETURNING id, cliente_id, estado_id, intencion_id, categoria_id, activa
+      RETURNING ${getConversationSelectFields()}
     `,
     [conversationId, stateName, stateId]
   );
@@ -201,28 +205,75 @@ async function updateConversationState({
     throw new Error(`No existe la conversacion: ${conversationId}`);
   }
 
-  return {
-    id: Number(result.rows[0].id),
-    clienteId: Number(result.rows[0].cliente_id),
-    estadoId: result.rows[0].estado_id
-      ? Number(result.rows[0].estado_id)
-      : null,
-    intencionId: result.rows[0].intencion_id
-      ? Number(result.rows[0].intencion_id)
-      : null,
-    categoriaId: result.rows[0].categoria_id
-      ? Number(result.rows[0].categoria_id)
-      : null,
-    activa: Boolean(result.rows[0].activa),
-  };
+  return mapConversationRow(result.rows[0]);
+}
+
+async function takeConversationByHuman({
+  conversationId,
+  humanAgentId = null,
+  pauseBot = true,
+}) {
+  const result = await db.query(
+    `
+      UPDATE public.conversaciones
+      SET control_owner = 'human',
+          human_taken_at = NOW(),
+          human_agent_id = $2,
+          bot_paused = $3,
+          ultima_interaccion = NOW()
+      WHERE id = $1
+      RETURNING ${getConversationSelectFields()}
+    `,
+    [conversationId, humanAgentId, pauseBot]
+  );
+
+  if (result.rows.length === 0) {
+    throw new Error(`No existe la conversacion: ${conversationId}`);
+  }
+
+  return mapConversationRow(result.rows[0]);
+}
+
+async function resumeConversationByBot(conversationId) {
+  const result = await db.query(
+    `
+      UPDATE public.conversaciones
+      SET control_owner = 'bot',
+          human_taken_at = NULL,
+          human_agent_id = NULL,
+          bot_paused = FALSE,
+          ultima_interaccion = NOW()
+      WHERE id = $1
+      RETURNING ${getConversationSelectFields()}
+    `,
+    [conversationId]
+  );
+
+  if (result.rows.length === 0) {
+    throw new Error(`No existe la conversacion: ${conversationId}`);
+  }
+
+  return mapConversationRow(result.rows[0]);
+}
+
+function isBotResponseEnabled(conversation) {
+  return Boolean(
+    conversation &&
+      conversation.controlOwner === "bot" &&
+      conversation.botPaused === false
+  );
 }
 
 module.exports = {
   findActiveConversationByCustomerId,
+  findConversationById,
   findConversationStateIdByName,
   createConversationForCustomer,
   findOrCreateActiveConversation,
   updateConversationIntent,
   updateConversationCategory,
   updateConversationState,
+  takeConversationByHuman,
+  resumeConversationByBot,
+  isBotResponseEnabled,
 };

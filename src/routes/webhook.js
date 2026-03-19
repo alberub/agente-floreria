@@ -11,6 +11,8 @@ const {
 const {
   findActiveConversationByCustomerId,
   findOrCreateActiveConversation,
+  takeConversationByHuman,
+  isBotResponseEnabled,
 } = require("../repositories/conversationRepository");
 const {
   getActiveProductsByCategoryId,
@@ -21,6 +23,29 @@ const {
 } = require("../repositories/messageRepository");
 
 const router = express.Router();
+const HUMAN_HANDOFF_PATTERNS = [
+  /asesor/i,
+  /humano/i,
+  /persona/i,
+  /agente/i,
+  /representante/i,
+];
+
+function isHumanHandoffRequest(message) {
+  const normalized = String(message || "").trim();
+
+  return (
+    normalized.length > 0 &&
+    HUMAN_HANDOFF_PATTERNS.some((pattern) => pattern.test(normalized))
+  );
+}
+
+function buildHumanHandoffReply() {
+  return (
+    "Claro, voy a pausar al asistente y canalizar tu chat con un asesor humano. " +
+    "En cuanto uno tome la conversacion te atendera por este mismo medio."
+  );
+}
 
 function getTextMessages(changes) {
   const messages = [];
@@ -105,6 +130,31 @@ router.post("/webhook", async (req, res) => {
         rol: "user",
         mensaje: incomingMessage.text,
       });
+
+      if (isHumanHandoffRequest(incomingMessage.text)) {
+        await takeConversationByHuman({
+          conversationId: conversation.id,
+          humanAgentId: null,
+        });
+
+        const handoffReply = buildHumanHandoffReply();
+        await saveMessage({
+          conversacionId: conversation.id,
+          rol: "bot",
+          mensaje: handoffReply,
+        });
+        await sendWhatsAppTextMessage(incomingMessage.from, handoffReply);
+        continue;
+      }
+
+      const freshConversation = await findActiveConversationByCustomerId(
+        customer.id
+      );
+
+      if (!isBotResponseEnabled(freshConversation)) {
+        continue;
+      }
+
       const recentMessages = await getRecentMessagesByConversation(
         conversation.id
       );
@@ -127,6 +177,10 @@ router.post("/webhook", async (req, res) => {
       const updatedConversation = await findActiveConversationByCustomerId(
         customer.id
       );
+
+      if (!isBotResponseEnabled(updatedConversation)) {
+        continue;
+      }
 
       if (isCatalogReply(reply) && updatedConversation?.categoriaId) {
         const products = await getActiveProductsByCategoryId(
