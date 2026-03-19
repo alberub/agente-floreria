@@ -578,7 +578,32 @@ function buildProductSelectionHelpReply(category, products) {
     )}. Si lo deseas, responde "la quiero" para continuar con la direccion de entrega.`;
   }
 
-  return `Responde solo con el numero o el nombre de una opcion de ${category.tipoCategoria}.`;
+  return `Si alguna opcion te gusta, comparteme el numero o el nombre. Si ninguna te convence, tambien puedo ayudarte a ver otras opciones o ponerte con un asesor.`;
+}
+
+function isProductRejectionMessage(message) {
+  const normalized = normalizeText(message);
+
+  return (
+    normalized.includes("no me interesa ninguna") ||
+    normalized.includes("ninguna me interesa") ||
+    normalized.includes("no me gusta ninguna") ||
+    normalized.includes("no quiero ninguna") ||
+    normalized.includes("ninguna opcion") ||
+    normalized.includes("ninguna") ||
+    normalized.includes("no me convence") ||
+    normalized.includes("no me convencen") ||
+    normalized.includes("quiero otras opciones") ||
+    normalized.includes("tienes otras opciones") ||
+    normalized.includes("busco otra opcion")
+  );
+}
+
+function buildProductRejectionReply(category) {
+  return (
+    `No pasa nada. Si quieres, puedo mostrarte otras opciones de ${category.tipoCategoria} ` +
+    'o te comunico con un asesor para ayudarte a elegir. Si prefieres hablar con una persona, escribe "quiero hablar con un asesor".'
+  );
 }
 
 function looksLikeDeliveryAddress(message) {
@@ -1478,6 +1503,10 @@ module.exports = {
       }
 
       if (!selectedProduct) {
+        if (isProductRejectionMessage(message)) {
+          return buildProductRejectionReply(selectedCategory);
+        }
+
         if (isGreetingMessage(message) || isAvailabilityQuestion(message)) {
           return buildProductSelectionHelpReply(selectedCategory, products);
         }

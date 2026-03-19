@@ -3,6 +3,7 @@ const { metaVerifyToken } = require("../config/env");
 const { runFloristAgent } = require("../agent/openaiAgent");
 const {
   sendWhatsAppTextMessage,
+  sendWhatsAppTypingIndicator,
   sendWhatsAppImageMessage,
 } = require("../services/metaService");
 const {
@@ -69,6 +70,7 @@ function getTextMessages(changes) {
       }
 
       messages.push({
+        messageId: incomingMessage.id || null,
         from,
         text,
         nombreCliente: contactName,
@@ -153,6 +155,17 @@ router.post("/webhook", async (req, res) => {
 
       if (!isBotResponseEnabled(freshConversation)) {
         continue;
+      }
+
+      if (incomingMessage.messageId) {
+        try {
+          await sendWhatsAppTypingIndicator(incomingMessage.messageId);
+        } catch (error) {
+          console.error(
+            "No se pudo enviar typing indicator a Meta:",
+            error.message
+          );
+        }
       }
 
       const recentMessages = await getRecentMessagesByConversation(
