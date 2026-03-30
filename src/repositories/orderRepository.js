@@ -42,7 +42,7 @@ async function createOrder({
         fecha_confirmacion,
         estatus_entrega
       )
-      VALUES ($1, $2, $3, $4, $5, 'pendiente', NOW(), $6, $7, $8, $9, NOW(), $10)
+      VALUES ($1, $2, $3, $4, $5, 'pendiente', timezone('America/Monterrey', now()), $6, $7, $8, $9, timezone('America/Monterrey', now()), $10)
       RETURNING id, cliente_id, producto_id, conversacion_id, direccion_entrega, total, estado, fecha_creacion
     `,
     [

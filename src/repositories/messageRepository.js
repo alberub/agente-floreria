@@ -9,7 +9,7 @@ async function saveMessage({ conversacionId, rol, mensaje }) {
         mensaje,
         fecha
       )
-      VALUES ($1, $2, $3, NOW())
+      VALUES ($1, $2, $3, timezone('America/Monterrey', now()))
       RETURNING id, conversacion_id, rol, mensaje, fecha
     `,
     [conversacionId, rol, mensaje]

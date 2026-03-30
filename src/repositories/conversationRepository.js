@@ -104,7 +104,7 @@ async function createConversationForCustomer(customerId) {
         ultima_interaccion,
         activa
       )
-      VALUES ($1, $2, $3, NOW(), TRUE)
+      VALUES ($1, $2, $3, timezone('America/Monterrey', now()), TRUE)
       RETURNING ${getConversationSelectFields()}
     `,
     [customerId, "inicio", initialStateId]
@@ -142,7 +142,7 @@ async function updateConversationIntent({
       SET intencion_id = $2,
           estado = $3,
           estado_id = $4,
-          ultima_interaccion = NOW()
+          ultima_interaccion = timezone('America/Monterrey', now())
       WHERE id = $1
       RETURNING ${getConversationSelectFields()}
     `,
@@ -169,7 +169,7 @@ async function updateConversationCategory({
       SET categoria_id = $2,
           estado = $3,
           estado_id = $4,
-          ultima_interaccion = NOW()
+          ultima_interaccion = timezone('America/Monterrey', now())
       WHERE id = $1
       RETURNING ${getConversationSelectFields()}
     `,
@@ -194,7 +194,7 @@ async function updateConversationState({
       UPDATE public.conversaciones
       SET estado = $2,
           estado_id = $3,
-          ultima_interaccion = NOW()
+          ultima_interaccion = timezone('America/Monterrey', now())
       WHERE id = $1
       RETURNING ${getConversationSelectFields()}
     `,
@@ -217,10 +217,10 @@ async function takeConversationByHuman({
     `
       UPDATE public.conversaciones
       SET control_owner = 'human',
-          human_taken_at = NOW(),
+          human_taken_at = timezone('America/Monterrey', now()),
           human_agent_id = $2,
           bot_paused = $3,
-          ultima_interaccion = NOW()
+          ultima_interaccion = timezone('America/Monterrey', now())
       WHERE id = $1
       RETURNING ${getConversationSelectFields()}
     `,
@@ -242,7 +242,7 @@ async function resumeConversationByBot(conversationId) {
           human_taken_at = NULL,
           human_agent_id = NULL,
           bot_paused = FALSE,
-          ultima_interaccion = NOW()
+          ultima_interaccion = timezone('America/Monterrey', now())
       WHERE id = $1
       RETURNING ${getConversationSelectFields()}
     `,
