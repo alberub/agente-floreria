@@ -1,4 +1,4 @@
-const { Pool } = require("pg");
+const { Pool, types } = require("pg");
 const {
   databaseUrl,
   dbHost,
@@ -19,6 +19,8 @@ const poolConfig = databaseUrl
       database: dbName,
       port: dbPort,
     };
+
+types.setTypeParser(1114, (value) => value);
 
 const pool = new Pool(poolConfig);
 
