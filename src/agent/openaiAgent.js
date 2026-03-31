@@ -30,9 +30,13 @@ const {
 } = require("../repositories/conversationRepository");
 
 const client = new OpenAI({ apiKey: openAiApiKey });
+const REQUEST_DELIVERY_TYPE_PREFIX =
+  "Perfecto. Antes de seguir, dime si lo necesitas a domicilio o si prefieres recoger en tienda.";
 const REQUEST_ZONE_PREFIX =
   "Para comenzar, comparteme la colonia y municipio de entrega o el codigo postal.";
 const REQUEST_DATE_PREFIX = "Perfecto, si tenemos cobertura en esa zona.";
+const REQUEST_PICKUP_DATE_PREFIX =
+  "Perfecto, lo preparamos para recoger en tienda.";
 const DELIVERY_OPTIONS_PREFIX = "Estas son las opciones de entrega disponibles:";
 const DELIVERY_OPTIONS_REMINDER_PREFIX =
   "Responde con el numero de la opcion de entrega que prefieras.";
@@ -410,8 +414,24 @@ async function buildCoverageZoneRequestReply() {
   return result.mensaje;
 }
 
+async function buildDeliveryTypeRequestReply() {
+  const result = await handleDeliveryToolCall("solicitar_tipo_entrega", {});
+
+  return result.mensaje;
+}
+
 async function buildDeliveryDateRequestReply() {
-  const result = await handleDeliveryToolCall("solicitar_fecha_entrega", {});
+  const result = await handleDeliveryToolCall("solicitar_fecha_entrega", {
+    tipoEntrega: "domicilio",
+  });
+
+  return result.mensaje;
+}
+
+async function buildPickupDateRequestReply() {
+  const result = await handleDeliveryToolCall("solicitar_fecha_entrega", {
+    tipoEntrega: "pickup",
+  });
 
   return result.mensaje;
 }
@@ -873,12 +893,48 @@ function getLatestDeliveryWindowSelectionIndexFromRecentMessages(recentMessages)
 }
 
 function getLatestRequestedDateFromRecentMessages(recentMessages) {
-  const reply = getLatestUserReplyAfterBotPrefix(recentMessages, REQUEST_DATE_PREFIX);
+  const reply =
+    getLatestUserReplyAfterBotPrefix(recentMessages, REQUEST_DATE_PREFIX) ||
+    getLatestUserReplyAfterBotPrefix(recentMessages, REQUEST_PICKUP_DATE_PREFIX);
   return reply ? parseRequestedDeliveryDate(reply) : null;
 }
 
 function getLatestPreliminaryZoneFromRecentMessages(recentMessages) {
   return getLatestUserReplyAfterBotPrefix(recentMessages, REQUEST_ZONE_PREFIX);
+}
+
+function detectDeliveryTypeChoice(message) {
+  const normalized = normalizeText(message);
+
+  if (
+    normalized === "1" ||
+    normalized.includes("a domicilio") ||
+    normalized.includes("domicilio") ||
+    normalized.includes("envio")
+  ) {
+    return "domicilio";
+  }
+
+  if (
+    normalized === "2" ||
+    normalized.includes("recoger") ||
+    normalized.includes("tienda") ||
+    normalized.includes("sucursal") ||
+    normalized.includes("pickup")
+  ) {
+    return "pickup";
+  }
+
+  return null;
+}
+
+function getLatestDeliveryTypeFromRecentMessages(recentMessages) {
+  const reply = getLatestUserReplyAfterBotPrefix(
+    recentMessages,
+    REQUEST_DELIVERY_TYPE_PREFIX
+  );
+
+  return reply ? detectDeliveryTypeChoice(reply) : null;
 }
 
 function buildEarliestDeliveryDateTime({ product, coverage, requestedDate }) {
@@ -1052,6 +1108,20 @@ async function buildFinalOrderConfirmationReply({
   return result.mensaje;
 }
 
+async function buildPickupOrderConfirmationReply({
+  product,
+  requestedDateLabel,
+}) {
+  const result = await handleDeliveryToolCall("solicitar_confirmacion_pedido", {
+    nombreProducto: product.nombre,
+    precioProducto: formatMoney(product.precio),
+    tipoEntrega: "pickup",
+    fechaRecolecta: requestedDateLabel,
+  });
+
+  return result.mensaje;
+}
+
 async function buildDeliveryOptionsReply(windows) {
   const result = await handleDeliveryToolCall("mostrar_opciones_entrega", {
     opciones: windows.map((window) => ({
@@ -1153,6 +1223,10 @@ module.exports = {
       const pendingSelectedWindow = extractSelectedWindowFromBotMessage(
         previousBotMessage?.mensaje
       );
+      const pendingPickupConfirmation =
+        previousBotMessage?.mensaje?.startsWith(
+          "Corrobora tu pedido para recoger en tienda:"
+        ) || false;
 
       if (
         previousBotMessage?.mensaje?.startsWith(DELIVERY_OPTIONS_PREFIX) ||
@@ -1238,6 +1312,45 @@ module.exports = {
 
       if (pendingFinalOrderAddress && isNegativeMessage(message)) {
         return "De acuerdo. Comparteme la direccion corregida para continuar.";
+      }
+
+      if (pendingPickupConfirmation && isFlexibleAffirmativeMessage(message)) {
+        const selectedProduct = await getSelectedProductFromRecentMessages(
+          recentMessages,
+          conversationCategoryId
+        );
+        const requestedDate = getLatestRequestedDateFromRecentMessages(recentMessages);
+
+        if (!selectedProduct || !customerId || !conversationId) {
+          throw new Error("Faltan datos para confirmar el pedido de recoleccion.");
+        }
+
+        await createOrder({
+          customerId,
+          productId: selectedProduct.id,
+          conversationId,
+          total: selectedProduct.precio,
+          deliveryStatus: "pendiente_recoleccion",
+        });
+
+        await updateConversationState({
+          conversationId,
+          stateName: postPurchaseStateId ? "pedido_confirmado" : "inicio",
+        });
+
+        return (
+          "Gracias por tu compra. Tu pedido para recoger en tienda ha sido registrado correctamente. " +
+          `Te lo prepararemos para ${requestedDate?.label || "la fecha acordada"}.`
+        );
+      }
+
+      if (pendingPickupConfirmation && isNegativeMessage(message)) {
+        await updateConversationState({
+          conversationId,
+          stateName: "esperando_producto",
+        });
+
+        return "De acuerdo. Dime que producto prefieres o si deseas cambiar la fecha estimada de recoleccion.";
       }
 
       if (pendingConfirmedAddress && isFlexibleAffirmativeMessage(message)) {
@@ -1377,7 +1490,7 @@ module.exports = {
           stateName: "esperando_producto",
         });
 
-        return buildCoverageZoneRequestReply();
+        return buildDeliveryTypeRequestReply();
       }
 
       if (
@@ -1423,6 +1536,18 @@ module.exports = {
       const products = await getActiveProductsByCategoryId(selectedCategory.id);
       const previousBotMessage = getPreviousBotMessage(recentMessages, message);
 
+      if (previousBotMessage?.mensaje?.startsWith(REQUEST_DELIVERY_TYPE_PREFIX)) {
+        const deliveryType = detectDeliveryTypeChoice(message);
+
+        if (!deliveryType) {
+          return buildDeliveryTypeRequestReply();
+        }
+
+        return deliveryType === "pickup"
+          ? buildPickupDateRequestReply()
+          : buildCoverageZoneRequestReply();
+      }
+
       if (previousBotMessage?.mensaje?.startsWith(REQUEST_ZONE_PREFIX)) {
         if (isGreetingMessage(message) || String(message || "").trim().length < 3) {
           return buildCoverageZoneRequestReply();
@@ -1453,6 +1578,7 @@ module.exports = {
 
       if (
         previousBotMessage?.mensaje?.startsWith(REQUEST_DATE_PREFIX) ||
+        previousBotMessage?.mensaje?.startsWith(REQUEST_PICKUP_DATE_PREFIX) ||
         previousBotMessage?.mensaje?.startsWith(DATE_RETRY_PREFIX)
       ) {
         const requestedDate = parseRequestedDeliveryDate(message);
@@ -1480,10 +1606,21 @@ module.exports = {
           );
         }
 
+        const deliveryType = getLatestDeliveryTypeFromRecentMessages(recentMessages);
+
         await updateConversationState({
           conversationId,
           stateName: "esperando_direccion",
         });
+
+        if (deliveryType === "pickup") {
+          const requestedDate = getLatestRequestedDateFromRecentMessages(recentMessages);
+
+          return buildPickupOrderConfirmationReply({
+            product: selectedProduct,
+            requestedDateLabel: requestedDate?.label || "la fecha solicitada",
+          });
+        }
 
         const deliveryContext = await buildDeliveryOptionsFromRecentSelections({
           recentMessages,
@@ -1530,7 +1667,7 @@ module.exports = {
               products,
               requestedDate
             )
-          : buildCoverageZoneRequestReply();
+          : buildDeliveryTypeRequestReply();
       }
     }
 
@@ -1550,7 +1687,7 @@ module.exports = {
         stateName: "esperando_producto",
       });
 
-      return buildCoverageZoneRequestReply();
+      return buildDeliveryTypeRequestReply();
     }
 
     const activeIntentions = await getActiveIntentions();
@@ -1586,7 +1723,7 @@ module.exports = {
         stateName: "esperando_producto",
       });
 
-      return buildCoverageZoneRequestReply();
+      return buildDeliveryTypeRequestReply();
     }
 
     if (

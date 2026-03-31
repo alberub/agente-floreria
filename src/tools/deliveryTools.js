@@ -2,6 +2,19 @@ const toolDefinitions = [
   {
     type: "function",
     function: {
+      name: "solicitar_tipo_entrega",
+      description:
+        "Pregunta al cliente si prefiere entrega a domicilio o recoger en tienda antes de validar cobertura.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "solicitar_zona_entrega",
       description:
         "Solicita al cliente una zona preliminar de entrega para validar cobertura inicial.",
@@ -21,7 +34,12 @@ const toolDefinitions = [
       parameters: {
         type: "object",
         additionalProperties: false,
-        properties: {},
+        properties: {
+          tipoEntrega: {
+            type: "string",
+            description: "domicilio o pickup segun el flujo actual.",
+          },
+        },
       },
     },
   },
@@ -148,13 +166,16 @@ const toolDefinitions = [
             type: "string",
             description: "Horario de entrega confirmado.",
           },
+          tipoEntrega: {
+            type: "string",
+            description: "domicilio o pickup segun el flujo actual.",
+          },
+          fechaRecolecta: {
+            type: "string",
+            description: "Dia estimado de recoleccion si el pedido sera para recoger en tienda.",
+          },
         },
-        required: [
-          "nombreProducto",
-          "precioProducto",
-          "direccionEntrega",
-          "horarioEntrega",
-        ],
+        required: ["nombreProducto", "precioProducto"],
       },
     },
   },
@@ -232,7 +253,23 @@ function buildRequestCoverageZoneMessage() {
   );
 }
 
-function buildRequestDeliveryDateMessage() {
+function buildRequestDeliveryTypeMessage() {
+  return (
+    "Perfecto. Antes de seguir, dime si lo necesitas a domicilio o si prefieres recoger en tienda.\n" +
+    "Responde solo con una opcion:\n" +
+    "1. A domicilio\n" +
+    "2. Recoger en tienda"
+  );
+}
+
+function buildRequestDeliveryDateMessage(tipoEntrega = "domicilio") {
+  if (tipoEntrega === "pickup") {
+    return (
+      "Perfecto, lo preparamos para recoger en tienda. " +
+      "Ahora indicame para que dia lo necesitas. Responde solo con hoy, manana o una fecha especifica."
+    );
+  }
+
   return (
     "Perfecto, si tenemos cobertura en esa zona. " +
     "Ahora indicame para que dia deseas la entrega. Responde solo con hoy, manana o una fecha especifica."
@@ -265,6 +302,19 @@ function buildFinalOrderConfirmationMessage({
     `Producto: ${nombreProducto} - ${precioProducto}\n` +
     `Horario de entrega: ${horarioEntrega}\n` +
     `Direccion de entrega: ${direccionEntrega}\n\n` +
+    'Si todo es correcto, responde "si". Si deseas cambiar algo, responde "no".'
+  );
+}
+
+function buildPickupOrderConfirmationMessage({
+  nombreProducto,
+  precioProducto,
+  fechaRecolecta,
+}) {
+  return (
+    "Corrobora tu pedido para recoger en tienda:\n" +
+    `Producto: ${nombreProducto} - ${precioProducto}\n` +
+    `Dia estimado de recoleccion: ${fechaRecolecta}\n\n` +
     'Si todo es correcto, responde "si". Si deseas cambiar algo, responde "no".'
   );
 }
@@ -314,6 +364,13 @@ function buildDeliveryOptionsMessage(opciones) {
 }
 
 async function handleToolCall(toolName, args) {
+  if (toolName === "solicitar_tipo_entrega") {
+    return {
+      ok: true,
+      mensaje: buildRequestDeliveryTypeMessage(),
+    };
+  }
+
   if (toolName === "solicitar_zona_entrega") {
     return {
       ok: true,
@@ -324,7 +381,7 @@ async function handleToolCall(toolName, args) {
   if (toolName === "solicitar_fecha_entrega") {
     return {
       ok: true,
-      mensaje: buildRequestDeliveryDateMessage(),
+      mensaje: buildRequestDeliveryDateMessage(args.tipoEntrega),
     };
   }
 
@@ -371,12 +428,19 @@ async function handleToolCall(toolName, args) {
   if (toolName === "solicitar_confirmacion_pedido") {
     return {
       ok: true,
-      mensaje: buildFinalOrderConfirmationMessage({
-        nombreProducto: args.nombreProducto,
-        precioProducto: args.precioProducto,
-        direccionEntrega: args.direccionEntrega,
-        horarioEntrega: args.horarioEntrega,
-      }),
+      mensaje:
+        args.tipoEntrega === "pickup"
+          ? buildPickupOrderConfirmationMessage({
+              nombreProducto: args.nombreProducto,
+              precioProducto: args.precioProducto,
+              fechaRecolecta: args.fechaRecolecta,
+            })
+          : buildFinalOrderConfirmationMessage({
+              nombreProducto: args.nombreProducto,
+              precioProducto: args.precioProducto,
+              direccionEntrega: args.direccionEntrega,
+              horarioEntrega: args.horarioEntrega,
+            }),
     };
   }
 
