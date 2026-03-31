@@ -7,6 +7,7 @@ function mapOrder(row) {
     productoId: Number(row.producto_id),
     conversacionId: Number(row.conversacion_id),
     direccionEntrega: row.direccion_entrega,
+    tipoEntrega: row.tipo_entrega || null,
     total: Number(row.total || 0),
     estado: row.estado,
     fechaCreacion: row.fecha_creacion,
@@ -18,6 +19,7 @@ async function createOrder({
   productId,
   conversationId,
   deliveryAddress = null,
+  deliveryType = "domicilio",
   branchId = null,
   deliveryDate = null,
   deliveryStartTime = null,
@@ -32,6 +34,7 @@ async function createOrder({
         producto_id,
         conversacion_id,
         direccion_entrega,
+        tipo_entrega,
         total,
         estado,
         fecha_creacion,
@@ -42,14 +45,15 @@ async function createOrder({
         fecha_confirmacion,
         estatus_entrega
       )
-      VALUES ($1, $2, $3, $4, $5, 'pendiente', timezone('America/Monterrey', now()), $6, $7, $8, $9, timezone('America/Monterrey', now()), $10)
-      RETURNING id, cliente_id, producto_id, conversacion_id, direccion_entrega, total, estado, fecha_creacion
+      VALUES ($1, $2, $3, $4, $5, $6, 'pendiente', timezone('America/Monterrey', now()), $7, $8, $9, $10, timezone('America/Monterrey', now()), $11)
+      RETURNING id, cliente_id, producto_id, conversacion_id, direccion_entrega, tipo_entrega, total, estado, fecha_creacion
     `,
     [
       customerId,
       productId,
       conversationId,
       deliveryAddress,
+      deliveryType,
       total,
       branchId,
       deliveryDate,
@@ -65,7 +69,7 @@ async function createOrder({
 async function findLatestPendingOrderByConversationId(conversationId) {
   const result = await db.query(
     `
-      SELECT id, cliente_id, producto_id, conversacion_id, direccion_entrega, total, estado, fecha_creacion
+      SELECT id, cliente_id, producto_id, conversacion_id, direccion_entrega, tipo_entrega, total, estado, fecha_creacion
       FROM public.pedidos
       WHERE conversacion_id = $1
         AND direccion_entrega IS NULL
@@ -88,7 +92,7 @@ async function updateOrderDeliveryAddress({ orderId, deliveryAddress }) {
       UPDATE public.pedidos
       SET direccion_entrega = $2
       WHERE id = $1
-      RETURNING id, cliente_id, producto_id, conversacion_id, direccion_entrega, total, estado, fecha_creacion
+      RETURNING id, cliente_id, producto_id, conversacion_id, direccion_entrega, tipo_entrega, total, estado, fecha_creacion
     `,
     [orderId, deliveryAddress]
   );

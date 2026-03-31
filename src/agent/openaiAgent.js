@@ -1198,7 +1198,59 @@ function isGratitudeMessage(message) {
   );
 }
 
-function buildPostPurchaseReply() {
+function isPostConfirmationCourtesyMessage(message) {
+  return /^(gracias|muchas gracias|perfecto|sale|ok|okay|ahi lo recojo|ahi paso|nos vemos|entendido|va que va|excelente)([!. ]*)$/i.test(
+    String(message || "").trim()
+  );
+}
+
+function getLatestPurchaseConfirmationMessage(recentMessages) {
+  return [...(recentMessages || [])]
+    .reverse()
+    .find(
+      (item) =>
+        item.rol === "bot" &&
+        typeof item.mensaje === "string" &&
+        (
+          item.mensaje.startsWith("Gracias por tu compra. Tu pedido ha sido registrado") ||
+          item.mensaje.startsWith("Excelente. Tu pedido #")
+        )
+    ) || null;
+}
+
+function buildPostPurchaseReply(recentMessages, message) {
+  const latestConfirmation = getLatestPurchaseConfirmationMessage(recentMessages);
+  const normalizedMessage = normalizeText(message);
+
+  if (latestConfirmation?.mensaje?.startsWith("Excelente. Tu pedido #")) {
+    if (
+      normalizedMessage.includes("ubicacion") ||
+      normalizedMessage.includes("direccion") ||
+      normalizedMessage.includes("maps") ||
+      normalizedMessage.includes("donde")
+    ) {
+      return (
+        "Claro. En el mensaje anterior te comparti la sucursal y el enlace de Maps. " +
+        "Si quieres, te lo vuelvo a compartir o te conecto con un agente."
+      );
+    }
+
+    if (
+      normalizedMessage.includes("hora") ||
+      normalizedMessage.includes("horario") ||
+      normalizedMessage.includes("a que hora")
+    ) {
+      return (
+        "Claro. Puedes revisar el horario de recoleccion en el mensaje anterior. " +
+        "Si necesitas ajustar la hora o avisar que llegaras mas tarde, respondeme aqui."
+      );
+    }
+
+    return (
+      "Perfecto, te esperamos en sucursal. Si necesitas cambiar algo o avisar que llegaras mas tarde, respondeme aqui."
+    );
+  }
+
   return (
     "Con gusto. Tu pedido ya quedo confirmado y en breve te compartiremos el seguimiento. " +
     'Si deseas hacer otro pedido, escribe "nuevo pedido".'
@@ -1206,14 +1258,7 @@ function buildPostPurchaseReply() {
 }
 
 function hasRecentPurchaseConfirmation(recentMessages) {
-  return [...(recentMessages || [])]
-    .reverse()
-    .some(
-      (item) =>
-        item.rol === "bot" &&
-        typeof item.mensaje === "string" &&
-        item.mensaje.startsWith("Gracias por tu compra. Tu pedido ha sido registrado")
-    );
+  return Boolean(getLatestPurchaseConfirmationMessage(recentMessages));
 }
 
 function isLikelyNewPurchaseMessage(message) {
@@ -1347,6 +1392,7 @@ module.exports = {
           productId: deliveryContext.selectedProduct.id,
           conversationId,
           deliveryAddress: pendingFinalOrderAddress,
+          deliveryType: "domicilio",
           branchId: deliveryContext.coverage.id,
           deliveryDate: reservedWindow.fecha,
           deliveryStartTime: reservedWindow.horaInicio,
@@ -1382,6 +1428,7 @@ module.exports = {
           customerId,
           productId: selectedProduct.id,
           conversationId,
+          deliveryType: "pickup",
           branchId: pickupBranch?.id || null,
           deliveryDate: requestedDate?.date || null,
           total: selectedProduct.precio,
@@ -1521,10 +1568,11 @@ module.exports = {
 
       if (
         isGratitudeMessage(message) ||
+        isPostConfirmationCourtesyMessage(message) ||
         isGreetingMessage(message) ||
         !isLikelyNewPurchaseMessage(message)
       ) {
-        return buildPostPurchaseReply();
+        return buildPostPurchaseReply(recentMessages, message);
       }
 
       if (conversationId && matchedCategoryFromFreeText) {
@@ -1568,11 +1616,11 @@ module.exports = {
         return buildGreetingReply(message, nombreCliente);
       }
 
-      return buildPostPurchaseReply();
+      return buildPostPurchaseReply(recentMessages, message);
     }
 
     if (hasRecentConfirmedPurchase && !isLikelyNewPurchaseMessage(message)) {
-      return buildPostPurchaseReply();
+      return buildPostPurchaseReply(recentMessages, message);
     }
 
     if (Number(conversationStateId) === Number(waitingProductStateId)) {
