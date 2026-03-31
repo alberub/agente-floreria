@@ -20,7 +20,10 @@ const {
 const {
   createOrder,
 } = require("../repositories/orderRepository");
-const { findClosestBranchCoverage } = require("../repositories/branchRepository");
+const {
+  findClosestBranchCoverage,
+  findDefaultPickupBranch,
+} = require("../repositories/branchRepository");
 const { geocodeAddress } = require("../services/mapsService");
 const {
   findConversationStateIdByName,
@@ -202,6 +205,26 @@ function formatHumanDate(date) {
 function formatBusinessTime(date) {
   const parts = getBusinessDateParts(date);
   return `${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
+function formatClockLabel(value) {
+  const normalized = String(value || "").slice(0, 5);
+
+  if (!normalized) {
+    return null;
+  }
+
+  const [hours, minutes] = normalized.split(":");
+  const parsedHours = Number(hours);
+  const parsedMinutes = Number(minutes);
+
+  if (Number.isNaN(parsedHours) || Number.isNaN(parsedMinutes)) {
+    return normalized;
+  }
+
+  const suffix = parsedHours >= 12 ? "p.m." : "a.m.";
+  const displayHours = parsedHours % 12 || 12;
+  return `${displayHours}:${String(parsedMinutes).padStart(2, "0")} ${suffix}`;
 }
 
 function addBusinessDays(date, days) {
@@ -1122,6 +1145,35 @@ async function buildPickupOrderConfirmationReply({
   return result.mensaje;
 }
 
+function buildPickupRegisteredReply({
+  order,
+  branch,
+  requestedDateLabel,
+}) {
+  const pickupWindow =
+    branch?.horaApertura && branch?.horaCierre
+      ? `${formatClockLabel(branch.horaApertura)} y ${formatClockLabel(
+          branch.horaCierre
+        )}`
+      : "el horario habitual de la tienda";
+  const readyAt = branch?.horaApertura
+    ? `a partir de las ${formatClockLabel(branch.horaApertura)}`
+    : "a partir de la apertura";
+  const locationLine = branch?.direccion
+    ? `${branch.nombre}, ${branch.direccion}`
+    : branch?.nombre || "nuestra sucursal";
+
+  return (
+    `Excelente. Tu pedido #${order.id} ya quedo registrado.\n\n` +
+    `Recogida en: ${locationLine}\n` +
+    `Maps: ${branch?.mapsUrl || "Ubicacion disponible al confirmar con un asesor"}\n` +
+    `Horario: Puedes pasar ${requestedDateLabel || "en la fecha acordada"} ${pickupWindow}. ` +
+    `Tu pedido estara listo ${readyAt}.\n` +
+    "Pago: Podras liquidarlo directamente en caja al recoger (efectivo o tarjeta).\n" +
+    "Ayuda: Si te retrasas o necesitas apoyo, responde a este chat y te conectamos con un agente."
+  );
+}
+
 async function buildDeliveryOptionsReply(windows) {
   const result = await handleDeliveryToolCall("mostrar_opciones_entrega", {
     opciones: windows.map((window) => ({
@@ -1320,15 +1372,18 @@ module.exports = {
           conversationCategoryId
         );
         const requestedDate = getLatestRequestedDateFromRecentMessages(recentMessages);
+        const pickupBranch = await findDefaultPickupBranch();
 
         if (!selectedProduct || !customerId || !conversationId) {
           throw new Error("Faltan datos para confirmar el pedido de recoleccion.");
         }
 
-        await createOrder({
+        const order = await createOrder({
           customerId,
           productId: selectedProduct.id,
           conversationId,
+          branchId: pickupBranch?.id || null,
+          deliveryDate: requestedDate?.date || null,
           total: selectedProduct.precio,
           deliveryStatus: "pendiente_recoleccion",
         });
@@ -1338,10 +1393,11 @@ module.exports = {
           stateName: postPurchaseStateId ? "pedido_confirmado" : "inicio",
         });
 
-        return (
-          "Gracias por tu compra. Tu pedido para recoger en tienda ha sido registrado correctamente. " +
-          `Te lo prepararemos para ${requestedDate?.label || "la fecha acordada"}.`
-        );
+        return buildPickupRegisteredReply({
+          order,
+          branch: pickupBranch,
+          requestedDateLabel: requestedDate?.label || "en la fecha acordada",
+        });
       }
 
       if (pendingPickupConfirmation && isNegativeMessage(message)) {

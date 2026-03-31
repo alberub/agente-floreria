@@ -1,5 +1,38 @@
 const db = require("../db");
 
+function pickString(payload, keys) {
+  for (const key of keys) {
+    const value = payload?.[key];
+
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return "";
+}
+
+function buildBranchAddress(payload) {
+  const fullAddress = pickString(payload, [
+    "direccion_completa",
+    "direccion",
+    "domicilio",
+  ]);
+
+  if (fullAddress) {
+    return fullAddress;
+  }
+
+  const parts = [
+    pickString(payload, ["calle", "street"]),
+    pickString(payload, ["numero", "numero_exterior", "num_ext"]),
+    pickString(payload, ["colonia"]),
+    pickString(payload, ["municipio", "ciudad"]),
+  ].filter(Boolean);
+
+  return parts.join(", ");
+}
+
 async function findClosestBranchCoverage({ lat, lng }) {
   const result = await db.query(
     `
@@ -40,6 +73,53 @@ async function findClosestBranchCoverage({ lat, lng }) {
   };
 }
 
+async function findDefaultPickupBranch() {
+  const result = await db.query(
+    `
+      SELECT
+        s.id,
+        s.nombre,
+        s.hora_apertura,
+        s.hora_cierre,
+        s.tiempo_preparacion_min,
+        ST_Y(s.ubicacion::geometry) AS latitud,
+        ST_X(s.ubicacion::geometry) AS longitud,
+        to_jsonb(s) AS payload
+      FROM public.sucursales s
+      WHERE COALESCE(s.activo, TRUE) = TRUE
+      ORDER BY s.id ASC
+      LIMIT 1
+    `
+  );
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
+  const row = result.rows[0];
+  const payload = row.payload || {};
+  const address = buildBranchAddress(payload);
+  const latitude = Number(row.latitud || 0);
+  const longitude = Number(row.longitud || 0);
+  const mapsUrl =
+    latitude && longitude
+      ? `https://www.google.com/maps?q=${latitude},${longitude}`
+      : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+          address || row.nombre
+        )}`;
+
+  return {
+    id: Number(row.id),
+    nombre: String(row.nombre || "").trim(),
+    direccion: address || null,
+    horaApertura: row.hora_apertura || null,
+    horaCierre: row.hora_cierre || null,
+    tiempoPreparacionMin: Number(row.tiempo_preparacion_min || 60),
+    mapsUrl,
+  };
+}
+
 module.exports = {
   findClosestBranchCoverage,
+  findDefaultPickupBranch,
 };
