@@ -2,9 +2,11 @@ const express = require("express");
 const { runFloristAgent } = require("../agent/openaiAgent");
 const {
   findOrCreateCustomerByPhone,
+  findCustomerById,
 } = require("../repositories/customerRepository");
 const {
   findActiveConversationByCustomerId,
+  findConversationById,
   findOrCreateActiveConversation,
   takeConversationByHuman,
   isBotResponseEnabled,
@@ -16,6 +18,7 @@ const {
 const {
   createConversationEvent,
 } = require("../repositories/conversationEventRepository");
+const { sendWhatsAppTextMessage } = require("../services/metaService");
 
 const router = express.Router();
 const HUMAN_HANDOFF_PATTERNS = [
@@ -165,6 +168,100 @@ router.post("/agent/respond", async (req, res) => {
       customer,
       conversation,
       reply,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error.message,
+    });
+  }
+});
+
+router.post("/agent/reply-last-customer", async (req, res) => {
+  try {
+    const { conversationId, deliverToCustomer = true } = req.body || {};
+    const normalizedConversationId = Number(conversationId);
+
+    if (!Number.isInteger(normalizedConversationId) || normalizedConversationId <= 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "El campo conversationId es requerido y debe ser entero positivo.",
+      });
+    }
+
+    const conversation = await findConversationById(normalizedConversationId);
+
+    if (!conversation) {
+      return res.status(404).json({
+        ok: false,
+        error: "No existe la conversacion solicitada.",
+      });
+    }
+
+    if (!isBotResponseEnabled(conversation)) {
+      return res.status(200).json({
+        ok: true,
+        skipped: "bot_disabled_or_human_control",
+      });
+    }
+
+    const recentMessages = await getRecentMessagesByConversation(conversation.id);
+    const lastMessage = recentMessages.at(-1) || null;
+    const lastCustomerMessage =
+      [...recentMessages].reverse().find(
+        (message) => String(message?.rol || "").trim().toLowerCase() === "user"
+      ) || null;
+
+    if (!lastCustomerMessage) {
+      return res.status(200).json({
+        ok: true,
+        skipped: "no_customer_message",
+      });
+    }
+
+    if (String(lastMessage?.rol || "").trim().toLowerCase() !== "user") {
+      return res.status(200).json({
+        ok: true,
+        skipped: "last_message_not_customer",
+      });
+    }
+
+    const customer = await findCustomerById(conversation.clienteId);
+
+    if (!customer?.telefono) {
+      return res.status(400).json({
+        ok: false,
+        error: "La conversacion no tiene un cliente con telefono valido.",
+      });
+    }
+
+    const reply = await runFloristAgent({
+      message: lastCustomerMessage.mensaje,
+      nombreCliente: customer.nombre || null,
+      telefono: customer.telefono,
+      customerId: customer.id,
+      conversationId: conversation.id,
+      conversationStateId: conversation.estadoId,
+      conversationCategoryId: conversation.categoriaId,
+      recentMessages,
+    });
+
+    const storedReply = await saveMessage({
+      conversacionId: conversation.id,
+      rol: "bot",
+      mensaje: reply,
+    });
+
+    if (deliverToCustomer) {
+      await sendWhatsAppTextMessage(customer.telefono, reply);
+    }
+
+    return res.status(200).json({
+      ok: true,
+      conversationId: conversation.id,
+      reply,
+      delivered: Boolean(deliverToCustomer),
+      messageId: storedReply.id,
     });
   } catch (error) {
     return res.status(500).json({

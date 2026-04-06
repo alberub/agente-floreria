@@ -6,7 +6,10 @@ const {
   isBotResponseEnabled,
 } = require("../repositories/conversationRepository");
 const { findCustomerById } = require("../repositories/customerRepository");
-const { saveMessage } = require("../repositories/messageRepository");
+const {
+  saveMessage,
+  getRecentMessagesByConversation,
+} = require("../repositories/messageRepository");
 const { createConversationEvent } = require("../repositories/conversationEventRepository");
 const { sendWhatsAppTextMessage } = require("../services/metaService");
 
@@ -186,11 +189,28 @@ router.post("/human/respond", async (req, res) => {
       });
     }
 
+    const previousMessages = await getRecentMessagesByConversation(conversation.id, 1);
     const storedMessage = await saveMessage({
       conversacionId: conversation.id,
       rol: "asesor",
       mensaje: message.trim(),
     });
+
+    if (!previousMessages.length) {
+      await createConversationEvent({
+        conversationId: conversation.id,
+        eventCode: "conversation_opened_by_human",
+        actorType: "human",
+        actorRef: humanAgentId ? String(humanAgentId) : null,
+        payload: {
+          messageId: storedMessage.id,
+          notifyCustomer: Boolean(notifyCustomer),
+          source: "human_respond_api",
+        },
+        occurredAt: storedMessage.fecha,
+      });
+    }
+
     await createConversationEvent({
       conversationId: conversation.id,
       eventCode: "manual_reply_sent",
