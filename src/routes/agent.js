@@ -28,6 +28,7 @@ const HUMAN_HANDOFF_PATTERNS = [
   /agente/i,
   /representante/i,
 ];
+const CUSTOMER_MESSAGE_ROLES = new Set(["user", "customer", "cliente", "contact"]);
 
 function isHumanHandoffRequest(message) {
   const normalized = String(message || "").trim();
@@ -42,6 +43,11 @@ function buildHumanHandoffReply() {
   return (
     "Claro, voy a pausar al asistente y canalizar tu chat con un asesor humano."
   );
+}
+
+function isCustomerMessageRole(role) {
+  const normalizedRole = String(role || "").trim().toLowerCase();
+  return CUSTOMER_MESSAGE_ROLES.has(normalizedRole);
 }
 
 router.post("/agent/respond", async (req, res) => {
@@ -209,7 +215,7 @@ router.post("/agent/reply-last-customer", async (req, res) => {
     const lastMessage = recentMessages.at(-1) || null;
     const lastCustomerMessage =
       [...recentMessages].reverse().find(
-        (message) => String(message?.rol || "").trim().toLowerCase() === "user"
+        (message) => isCustomerMessageRole(message?.rol)
       ) || null;
 
     if (!lastCustomerMessage) {
@@ -219,7 +225,7 @@ router.post("/agent/reply-last-customer", async (req, res) => {
       });
     }
 
-    if (String(lastMessage?.rol || "").trim().toLowerCase() !== "user") {
+    if (!isCustomerMessageRole(lastMessage?.rol)) {
       return res.status(200).json({
         ok: true,
         skipped: "last_message_not_customer",
