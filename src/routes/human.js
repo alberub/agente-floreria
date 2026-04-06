@@ -7,6 +7,7 @@ const {
 } = require("../repositories/conversationRepository");
 const { findCustomerById } = require("../repositories/customerRepository");
 const { saveMessage } = require("../repositories/messageRepository");
+const { createConversationEvent } = require("../repositories/conversationEventRepository");
 const { sendWhatsAppTextMessage } = require("../services/metaService");
 
 const router = express.Router();
@@ -40,10 +41,32 @@ router.post("/human/takeover", async (req, res) => {
       });
     }
 
+    const existingConversation = await findConversationById(conversationId);
+
+    if (!existingConversation) {
+      return res.status(404).json({
+        ok: false,
+        error: "No existe la conversacion solicitada.",
+      });
+    }
+
     const conversation = await takeConversationByHuman({
       conversationId,
       humanAgentId,
     });
+
+    if (existingConversation.controlOwner !== "human") {
+      await createConversationEvent({
+        conversationId: conversation.id,
+        eventCode: "conversation_taken_by_human",
+        actorType: "human",
+        actorRef: humanAgentId ? String(humanAgentId) : null,
+        payload: {
+          humanAgentId: conversation.humanAgentId,
+          source: "human_takeover_api",
+        },
+      });
+    }
 
     return res.status(200).json({
       ok: true,
@@ -69,7 +92,28 @@ router.post("/human/release", async (req, res) => {
       });
     }
 
+    const existingConversation = await findConversationById(conversationId);
+
+    if (!existingConversation) {
+      return res.status(404).json({
+        ok: false,
+        error: "No existe la conversacion solicitada.",
+      });
+    }
+
     const conversation = await resumeConversationByBot(conversationId);
+
+    if (existingConversation.controlOwner !== "bot") {
+      await createConversationEvent({
+        conversationId: conversation.id,
+        eventCode: "conversation_released_to_bot",
+        actorType: "human",
+        actorRef: null,
+        payload: {
+          source: "human_release_api",
+        },
+      });
+    }
 
     return res.status(200).json({
       ok: true,
@@ -129,10 +173,35 @@ router.post("/human/respond", async (req, res) => {
       humanAgentId,
     });
 
-    await saveMessage({
+    if (existingConversation.controlOwner !== "human") {
+      await createConversationEvent({
+        conversationId: conversation.id,
+        eventCode: "conversation_taken_by_human",
+        actorType: "human",
+        actorRef: humanAgentId ? String(humanAgentId) : null,
+        payload: {
+          humanAgentId: conversation.humanAgentId,
+          source: "human_respond_api",
+        },
+      });
+    }
+
+    const storedMessage = await saveMessage({
       conversacionId: conversation.id,
       rol: "asesor",
       mensaje: message.trim(),
+    });
+    await createConversationEvent({
+      conversationId: conversation.id,
+      eventCode: "manual_reply_sent",
+      actorType: "human",
+      actorRef: humanAgentId ? String(humanAgentId) : null,
+      payload: {
+        messageId: storedMessage.id,
+        notifyCustomer: Boolean(notifyCustomer),
+        source: "human_respond_api",
+      },
+      occurredAt: storedMessage.fecha,
     });
 
     if (notifyCustomer) {

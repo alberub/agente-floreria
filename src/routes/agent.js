@@ -13,6 +13,9 @@ const {
   getRecentMessagesByConversation,
   saveMessage,
 } = require("../repositories/messageRepository");
+const {
+  createConversationEvent,
+} = require("../repositories/conversationEventRepository");
 
 const router = express.Router();
 const HUMAN_HANDOFF_PATTERNS = [
@@ -55,16 +58,39 @@ router.post("/agent/respond", async (req, res) => {
     if (telefono) {
       customer = await findOrCreateCustomerByPhone(telefono);
       conversation = await findOrCreateActiveConversation(customer.id);
-      await saveMessage({
+      const storedMessage = await saveMessage({
         conversacionId: conversation.id,
         rol: "user",
         mensaje: message,
       });
 
+      if (conversation.wasCreated) {
+        await createConversationEvent({
+          conversationId: conversation.id,
+          eventCode: "conversation_opened_by_contact",
+          actorType: "contact",
+          actorRef: customer.telefono || telefono,
+          payload: {
+            customerId: customer.id,
+          },
+          occurredAt: storedMessage.fecha,
+        });
+      }
+
       if (isHumanHandoffRequest(message)) {
         conversation = await takeConversationByHuman({
           conversationId: conversation.id,
           humanAgentId: null,
+        });
+        await createConversationEvent({
+          conversationId: conversation.id,
+          eventCode: "conversation_taken_by_human",
+          actorType: "system",
+          actorRef: null,
+          payload: {
+            humanAgentId: conversation.humanAgentId,
+            source: "agent_handoff_request",
+          },
         });
 
         const handoffReply = buildHumanHandoffReply();
