@@ -185,7 +185,11 @@ router.post("/agent/respond", async (req, res) => {
 
 router.post("/agent/reply-last-customer", async (req, res) => {
   try {
-    const { conversationId, deliverToCustomer = true } = req.body || {};
+    const {
+      conversationId,
+      deliverToCustomer = true,
+      forceReply = false,
+    } = req.body || {};
     const normalizedConversationId = Number(conversationId);
 
     if (!Number.isInteger(normalizedConversationId) || normalizedConversationId <= 0) {
@@ -204,7 +208,7 @@ router.post("/agent/reply-last-customer", async (req, res) => {
       });
     }
 
-    if (!isBotResponseEnabled(conversation)) {
+    if (!forceReply && !isBotResponseEnabled(conversation)) {
       return res.status(200).json({
         ok: true,
         skipped: "bot_disabled_or_human_control",
