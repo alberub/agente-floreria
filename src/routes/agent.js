@@ -28,7 +28,17 @@ const HUMAN_HANDOFF_PATTERNS = [
   /agente/i,
   /representante/i,
 ];
-const CUSTOMER_MESSAGE_ROLES = new Set(["user", "customer", "cliente", "contact"]);
+const HUMAN_MESSAGE_ROLES = new Set(["assistant", "agent", "human", "asesor"]);
+const CUSTOMER_MESSAGE_ROLES = new Set([
+  "user",
+  "customer",
+  "cliente",
+  "contact",
+  "contacto",
+  "usuario",
+  "inbound",
+  "incoming",
+]);
 
 function isHumanHandoffRequest(message) {
   const normalized = String(message || "").trim();
@@ -47,7 +57,33 @@ function buildHumanHandoffReply() {
 
 function isCustomerMessageRole(role) {
   const normalizedRole = String(role || "").trim().toLowerCase();
-  return CUSTOMER_MESSAGE_ROLES.has(normalizedRole);
+
+  if (!normalizedRole) {
+    return false;
+  }
+
+  if (CUSTOMER_MESSAGE_ROLES.has(normalizedRole)) {
+    return true;
+  }
+
+  if (normalizedRole === "bot") {
+    return false;
+  }
+
+  if (HUMAN_MESSAGE_ROLES.has(normalizedRole)) {
+    return false;
+  }
+
+  if (normalizedRole === "system" || normalizedRole === "evento" || normalizedRole === "event") {
+    return false;
+  }
+
+  return (
+    normalizedRole.includes("user") ||
+    normalizedRole.includes("client") ||
+    normalizedRole.includes("cliente") ||
+    normalizedRole.includes("contact")
+  );
 }
 
 router.post("/agent/respond", async (req, res) => {
