@@ -88,7 +88,16 @@ function isCustomerMessageRole(role) {
 
 router.post("/agent/respond", async (req, res) => {
   try {
-    const { message, nombreCliente, telefono } = req.body || {};
+    const {
+      message,
+      nombreCliente,
+      telefono,
+      recentMessages: providedRecentMessages = [],
+      customerId: providedCustomerId = null,
+      conversationId: providedConversationId = null,
+      conversationStateId: providedConversationStateId = null,
+      conversationCategoryId: providedConversationCategoryId = null,
+    } = req.body || {};
 
     if (!message || typeof message !== "string") {
       return res.status(400).json({
@@ -170,16 +179,20 @@ router.post("/agent/respond", async (req, res) => {
 
     const recentMessages = conversation
       ? await getRecentMessagesByConversation(conversation.id)
+      : Array.isArray(providedRecentMessages)
+      ? providedRecentMessages
       : [];
 
     const reply = await runFloristAgent({
       message,
       nombreCliente: customer?.nombre || nombreCliente,
       telefono: customer?.telefono || telefono,
-      customerId: customer?.id || null,
-      conversationId: conversation?.id || null,
-      conversationStateId: conversation?.estadoId || null,
-      conversationCategoryId: conversation?.categoriaId || null,
+      customerId: customer?.id || providedCustomerId || null,
+      conversationId: conversation?.id || providedConversationId || null,
+      conversationStateId:
+        conversation?.estadoId || providedConversationStateId || null,
+      conversationCategoryId:
+        conversation?.categoriaId || providedConversationCategoryId || null,
       recentMessages,
     });
 

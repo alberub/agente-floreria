@@ -33,6 +33,7 @@ const {
 } = require("../repositories/conversationRepository");
 
 const client = new OpenAI({ apiKey: openAiApiKey });
+const RECENT_MESSAGES_CONTEXT_LIMIT = 120;
 const REQUEST_DELIVERY_TYPE_PREFIX =
   "Perfecto. Antes de seguir, dime si lo necesitas a domicilio o si prefieres recoger en tienda.";
 const REQUEST_ZONE_PREFIX =
@@ -149,6 +150,117 @@ function normalizeText(value) {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim();
+}
+
+function normalizePromptRole(role) {
+  const normalizedRole = normalizeText(role);
+
+  if (
+    normalizedRole === "user" ||
+    normalizedRole === "customer" ||
+    normalizedRole === "cliente" ||
+    normalizedRole === "contact" ||
+    normalizedRole === "contacto" ||
+    normalizedRole === "incoming" ||
+    normalizedRole === "inbound"
+  ) {
+    return "cliente";
+  }
+
+  if (normalizedRole === "bot") {
+    return "bot";
+  }
+
+  if (
+    normalizedRole === "assistant" ||
+    normalizedRole === "agent" ||
+    normalizedRole === "human" ||
+    normalizedRole === "asesor"
+  ) {
+    return "asesor";
+  }
+
+  return "sistema";
+}
+
+function buildRecentHistoryForPrompt(recentMessages, limit = RECENT_MESSAGES_CONTEXT_LIMIT) {
+  return [...(recentMessages || [])]
+    .slice(-limit)
+    .filter(
+      (item) =>
+        typeof item?.mensaje === "string" &&
+        item.mensaje.trim().length > 0
+    )
+    .map((item) => {
+      const role = normalizePromptRole(item.rol);
+      const timestamp = item.fecha ? ` [${item.fecha}]` : "";
+      return `${role}${timestamp}: ${item.mensaje.trim()}`;
+    })
+    .join("\n");
+}
+
+async function buildHistoryAwarePostPurchaseReply({
+  message,
+  nombreCliente,
+  recentMessages,
+}) {
+  const history = buildRecentHistoryForPrompt(recentMessages);
+
+  if (!history) {
+    return null;
+  }
+
+  const latestConfirmation = getLatestPurchaseConfirmationMessage(recentMessages);
+  const latestBotMessage = getLastBotMessage(recentMessages);
+  const latestSelectedWindow = getLatestSelectedWindowFromRecentMessages(recentMessages);
+  const latestFinalOrderAddress =
+    getLatestFinalOrderAddressFromRecentMessages(recentMessages);
+  const latestFinalOrderWindow =
+    getLatestFinalOrderWindowFromRecentMessages(recentMessages);
+  const completion = await client.chat.completions.create({
+    model: openAiModel,
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content:
+          "Eres el asistente de WhatsApp de una floreria en Monterrey. " +
+          "Debes responder usando el historial reciente completo, manteniendo consistencia con el giro del negocio y con lo ya hablado. " +
+          "Responde en espanol de Mexico, tono natural y breve (maximo 2 frases). " +
+          "Si el cliente solo confirma o agradece, responde corto y no repitas toda la confirmacion. " +
+          "Si el contexto reciente habla de recoger en sucursal, no menciones envio a domicilio salvo que el cliente quiera cambiarlo. " +
+          "Si el contexto reciente habla de entrega a domicilio, no menciones sucursal salvo que el cliente lo pida. " +
+          "No inventes direccion, sucursal, horario, numero de pedido ni estado si no aparecen en el historial. " +
+          "Si falta un dato para responder, pide solo ese dato faltante. " +
+          'Devuelve solo JSON con la forma {"reply": string}.',
+      },
+      {
+        role: "user",
+        content:
+          `Nombre del cliente: ${nombreCliente || "No disponible"}\n` +
+          `Ultimo mensaje del cliente: ${String(message || "").trim()}\n` +
+          `Ultimo mensaje del bot: ${latestBotMessage?.mensaje || "No disponible"}\n` +
+          `Ultima confirmacion relevante: ${latestConfirmation?.mensaje || "No disponible"}\n` +
+          `Horario seleccionado recientemente: ${latestSelectedWindow || latestFinalOrderWindow || "No disponible"}\n` +
+          `Direccion confirmada recientemente: ${latestFinalOrderAddress || "No disponible"}\n` +
+          `Historial reciente:\n${history}`,
+      },
+    ],
+  });
+
+  const content = completion.choices[0]?.message?.content?.trim();
+
+  if (!content) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(content);
+    const reply = typeof parsed.reply === "string" ? parsed.reply.trim() : "";
+    return reply || null;
+  } catch (_error) {
+    return null;
+  }
 }
 
 function getBusinessDateParts(date = new Date()) {
@@ -1218,7 +1330,7 @@ function getLatestPurchaseConfirmationMessage(recentMessages) {
     ) || null;
 }
 
-function buildPostPurchaseReply(recentMessages, message) {
+async function buildPostPurchaseReply(recentMessages, message, nombreCliente) {
   const latestConfirmation = getLatestPurchaseConfirmationMessage(recentMessages);
   const normalizedMessage = normalizeText(message);
 
@@ -1245,9 +1357,25 @@ function buildPostPurchaseReply(recentMessages, message) {
         "Si necesitas ajustar la hora o avisar que llegaras mas tarde, respondeme aqui."
       );
     }
+  }
 
+  try {
+    const contextualReply = await buildHistoryAwarePostPurchaseReply({
+      message,
+      nombreCliente,
+      recentMessages,
+    });
+
+    if (contextualReply) {
+      return contextualReply;
+    }
+  } catch (_error) {
+    // Si OpenAI falla, degradamos a una respuesta segura y coherente.
+  }
+
+  if (latestConfirmation?.mensaje?.startsWith("Excelente. Tu pedido #")) {
     return (
-      "Perfecto, te esperamos en sucursal. Si necesitas cambiar algo o avisar que llegaras mas tarde, respondeme aqui."
+      "Perfecto. Si necesitas cambiar algo o avisar que llegaras mas tarde, escribenos por aqui."
     );
   }
 
@@ -1572,7 +1700,7 @@ module.exports = {
         isGreetingMessage(message) ||
         !isLikelyNewPurchaseMessage(message)
       ) {
-        return buildPostPurchaseReply(recentMessages, message);
+        return buildPostPurchaseReply(recentMessages, message, nombreCliente);
       }
 
       if (conversationId && matchedCategoryFromFreeText) {
@@ -1616,11 +1744,11 @@ module.exports = {
         return buildGreetingReply(message, nombreCliente);
       }
 
-      return buildPostPurchaseReply(recentMessages, message);
+      return buildPostPurchaseReply(recentMessages, message, nombreCliente);
     }
 
     if (hasRecentConfirmedPurchase && !isLikelyNewPurchaseMessage(message)) {
-      return buildPostPurchaseReply(recentMessages, message);
+      return buildPostPurchaseReply(recentMessages, message, nombreCliente);
     }
 
     if (Number(conversationStateId) === Number(waitingProductStateId)) {

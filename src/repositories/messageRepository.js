@@ -24,7 +24,7 @@ async function saveMessage({ conversacionId, rol, mensaje }) {
   };
 }
 
-async function getRecentMessagesByConversation(conversacionId, limit = 30) {
+async function getRecentMessagesByConversation(conversacionId, limit = 120) {
   const result = await db.query(
     `
       SELECT id, conversacion_id, rol, mensaje, fecha
